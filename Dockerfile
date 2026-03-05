@@ -52,8 +52,10 @@ COPY --from=server-build /app/server /app/
 # Copy built client assets to server's public directory
 COPY --from=client-build /app/client/dist /app/public
 
-# Create directory for persistent data
-RUN mkdir -p /app/data && chown -R node:node /app/data
+# Create directory for persistent data and set permissions
+RUN mkdir -p /app/data && \
+    chown -R node:node /app && \
+    chmod -R 755 /app/data
 
 # Set environment variables
 ENV NODE_ENV=production
