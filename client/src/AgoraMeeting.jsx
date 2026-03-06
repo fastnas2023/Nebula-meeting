@@ -34,6 +34,7 @@ const AgoraMeeting = ({ onBack, username, addToast }) => {
   const [localCameraTrack, setLocalCameraTrack] = useState(null);
   const [loading, setLoading] = useState(false);
   const [meetingPassword, setMeetingPassword] = useState('');
+  const [displayName, setDisplayName] = useState(username || localStorage.getItem('username') || '');
 
   const clientRef = useRef(null);
   const localScreenTrackRef = useRef(null);
@@ -273,7 +274,10 @@ const AgoraMeeting = ({ onBack, username, addToast }) => {
       // Join using the App ID. Token is optional but recommended for security.
       // If your project is in "Secure Mode", token is REQUIRED.
       // If "Testing Mode", token can be null.
-      await clientRef.current.join(currentAppId, channelName, currentToken || null, null);
+      if (displayName.trim()) {
+          localStorage.setItem('username', displayName.trim());
+      }
+      await clientRef.current.join(currentAppId, channelName, currentToken || null, displayName || null);
       setJoined(true);
       setUiState('meeting');
       
@@ -448,6 +452,21 @@ const AgoraMeeting = ({ onBack, username, addToast }) => {
                     <div className="text-center">
                         <h1 className="text-4xl font-bold mb-2">{t('welcome_back_title')}</h1>
                         <p className="text-gray-400">{t('agora_welcome_desc')}</p>
+                    </div>
+
+                    <div className="w-full max-w-sm">
+                        <div className="relative">
+                             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                               <User className="text-gray-500" size={20} />
+                             </div>
+                             <input
+                               type="text"
+                               value={displayName}
+                               onChange={(e) => setDisplayName(e.target.value)}
+                               placeholder={t('enter_name_placeholder')}
+                               className="w-full bg-gray-900 border border-gray-700 text-white text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 block pl-10 p-3 transition-all outline-none placeholder-gray-500"
+                             />
+                        </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full">

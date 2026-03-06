@@ -61,6 +61,7 @@ app.get('/api/rooms', (req, res) => {
         creator: data.creator, // userId
         creatorName: data.creatorName || 'Unknown',
         createdAt: data.createdAt,
+        isProtected: !!data.password, // Check if password exists
         userCount: roomSockets ? roomSockets.size : 0
       };
     });
@@ -128,6 +129,14 @@ if (process.env.NODE_ENV === 'production') {
   app.get(/.*/, (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
   });
+} else {
+  // In development, we don't serve the React app (Vite does), 
+  // BUT Playwright might be hitting the server port directly expecting the app if configured that way.
+  // However, Playwright test uses http://localhost:5002.
+  // The server only serves /api and /socket.io in dev mode.
+  // The client is served by Vite on 5173.
+  // We need to point Playwright to 5173 or serve static files in dev too (not recommended).
+  // Let's redirect root to Vite dev server if hit directly in dev? Or just tell Playwright to use 5173.
 }
 
 const server = http.createServer(app);
@@ -135,7 +144,8 @@ const io = new Server(server, {
   cors: {
     origin: '*', // In production, replace with your client URL
     methods: ['GET', 'POST']
-  }
+  },
+  maxHttpBufferSize: 1e8 // 100 MB
 });
 
 // Store room state if needed, but for now we rely on socket.io rooms
@@ -148,7 +158,7 @@ const roomRoles = {};
 io.on('connection', (socket) => {
   console.log('New connection:', socket.id);
 
-  socket.on('join-room', (roomId, userId, username) => {
+  socket.on('join-room', (roomId, userId, username, password) => {
     // Leave previous rooms if any (optional, depending on use case)
     // Array.from(socket.rooms).forEach(room => {
     //   if (room !== socket.id) socket.leave(room);
@@ -156,13 +166,22 @@ io.on('connection', (socket) => {
 
     console.log(`User ${userId} (${username}) joining room ${roomId}`);
     
-    // Initialize room metadata if not exists
-    if (!rooms[roomId]) {
+    // Check if room exists
+    if (rooms[roomId]) {
+        // Check Password if set
+        if (rooms[roomId].password && rooms[roomId].password !== password) {
+            console.log(`Invalid password for room ${roomId}`);
+            socket.emit('error', 'Invalid Room Password');
+            return;
+        }
+    } else {
+      // Create new room
       console.log(`Creating new room ${roomId} with creator ${userId}`);
       rooms[roomId] = {
         creator: userId,
         creatorName: username,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        password: password || null // Store password if provided
       };
     }
 
@@ -280,6 +299,40 @@ io.on('connection', (socket) => {
     console.log(`[Role] user-muted emitted to room ${roomId}`);
   });
 
+  // Chat Messaging
+  socket.on('send-message', ({ roomId, message }) => {
+    const { userId, username } = socket.userData || {};
+    if (!roomId || !userId) return;
+
+    const msgData = {
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+      senderId: userId,
+      senderName: username || 'Anonymous',
+      type: 'text',
+      content: message,
+      timestamp: new Date().toISOString()
+    };
+
+    io.to(roomId).emit('receive-message', msgData);
+  });
+
+  // File Transfer
+  socket.on('send-file', ({ roomId, file }) => {
+    const { userId, username } = socket.userData || {};
+    if (!roomId || !userId) return;
+
+    const msgData = {
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+      senderId: userId,
+      senderName: username || 'Anonymous',
+      type: 'file',
+      file: file, // { name, size, type, data }
+      timestamp: new Date().toISOString()
+    };
+
+    io.to(roomId).emit('receive-message', msgData);
+  });
+
   socket.on('close-room', () => {
     console.log(`[Role] close-room request from ${socket.id}`);
     const { roomId, userId } = socket.userData || {};
@@ -300,6 +353,11 @@ io.on('connection', (socket) => {
     
     // Disconnect all sockets in room? Or let client handle redirection.
     // Ideally, client receives 'room-closed' and redirects to home.
+    
+    // Force disconnect all sockets in the room after a short delay
+    setTimeout(() => {
+        io.in(roomId).disconnectSockets(true);
+    }, 500);
   });
 
   // Signaling: Offer

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import io from 'socket.io-client';
-import { Mic, MicOff, Monitor, MonitorOff, PhoneOff, Users, Copy, Check, AlertTriangle, Loader2, Wifi, WifiOff, Settings, Video as VideoIcon, Volume2, StopCircle, SignalLow, Shield, UserX, Crown, VolumeX, Edit, RefreshCw, Clock } from 'lucide-react';
+import { Mic, MicOff, Monitor, MonitorOff, PhoneOff, Users, Copy, Check, AlertTriangle, Loader2, Wifi, WifiOff, Settings, Video as VideoIcon, Volume2, StopCircle, SignalLow, Shield, UserX, Crown, VolumeX, Edit, RefreshCw, Clock, ArrowUpCircle, ArrowRight, MessageSquare, Send, X, Paperclip, FileText, Download, FlipHorizontal, Lock, Unlock } from 'lucide-react';
 import { Loader } from './UI';
 
 // Use relative path for socket.io to leverage Vite proxy in dev and same-origin in prod
@@ -24,8 +24,8 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const [joined, setJoined] = useState(false);
   const [uiState, setUiState] = useState('welcome'); // 'welcome', 'setup', 'meeting'
   const [isSharing, setIsSharing] = useState(false);
-  const [isAudioEnabled, setIsAudioEnabled] = useState(false);
-  const [isVideoEnabled, setIsVideoEnabled] = useState(false);
+  const [isAudioEnabled, setIsAudioEnabled] = useState(true);
+  const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
   const [remoteStreams, setRemoteStreams] = useState({});
   const [copied, setCopied] = useState(false);
@@ -38,11 +38,15 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const [selectedCameraId, setSelectedCameraId] = useState('');
   const [selectedMicId, setSelectedMicId] = useState('');
   const [volumeLevel, setVolumeLevel] = useState(0);
+  const [nickname, setNickname] = useState(username || localStorage.getItem('username') || '');
   
   // Screen Share Preview State
   const [sharePreviewStream, setSharePreviewStream] = useState(null);
   const [isSharePreviewOpen, setIsSharePreviewOpen] = useState(false);
   const [isLowDataMode, setIsLowDataMode] = useState(false);
+  const [resolution, setResolution] = useState('720p'); // 360p, 720p, 1080p
+  const [frameRate, setFrameRate] = useState(30); // 15, 30, 60
+  const [roomPassword, setRoomPassword] = useState(''); // New State for Password
 
   // Role Management State
   const [myRole, setMyRole] = useState('participant');
@@ -53,13 +57,99 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const [activeRooms, setActiveRooms] = useState([]);
   const [isLoadingRooms, setIsLoadingRooms] = useState(false);
 
+  // Chat State
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [isMirrored, setIsMirrored] = useState(true);
+  const chatScrollRef = useRef(null);
+  const isChatOpenRef = useRef(isChatOpen);
+  const fileInputRef = useRef(null);
+
   useEffect(() => {
+      isChatOpenRef.current = isChatOpen;
+      if (isChatOpen) {
+          setUnreadCount(0);
+          // Scroll to bottom when opened
+          setTimeout(() => {
+              if (chatScrollRef.current) {
+                  chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+              }
+          }, 100);
+      }
+  }, [isChatOpen]);
+
+  useEffect(() => {
+    // Re-attach local stream to video element when it changes or when we enter meeting view
+    if (uiState === 'meeting' && localVideoRef.current && localStreamRef.current) {
+        // Ensure tracks are enabled if state says so
+        if (isVideoEnabled) {
+            localStreamRef.current.getVideoTracks().forEach(t => t.enabled = true);
+        }
+        if (isAudioEnabled) {
+            localStreamRef.current.getAudioTracks().forEach(t => t.enabled = true);
+        }
+
+        if (localVideoRef.current.srcObject !== localStreamRef.current) {
+            localVideoRef.current.srcObject = localStreamRef.current;
+        }
+    }
+  }, [uiState, isVideoEnabled, isAudioEnabled]);
+
+  useEffect(() => {
+    // Check URL params for room ID
+    // ONLY do this if we are in 'welcome' state and haven't joined yet
     if (uiState === 'welcome') {
+      const params = new URLSearchParams(window.location.search);
+      const urlRoomId = params.get('roomId');
+      
+      // Feature: Check if user is already in a room (from localStorage or similar state persistence if implemented)
+      // Since we don't have global state persistence across refreshes beyond URL, we rely on URL.
+      // But if we navigated back to 'welcome' without full reload, we might still have roomId state set but uiState='welcome'
+      // Let's simulate "Return to Room" logic.
+      
+      // If roomId is set (meaning we were in a room) and we are back at welcome (e.g. via Back button but component didn't unmount fully or we kept state)
+      // Actually, onBack() sets roomId to '' usually. 
+      // Let's assume we want to handle the case where user navigates away and back.
+      
+      if (urlRoomId && urlRoomId !== roomId) {
+          // Instead of auto-joining, let's show a confirmation if it looks like an active session
+          // For now, the requirement says "pop up confirmation".
+          // We can use a temporary state for this dialog.
+          setPendingRoomId(urlRoomId);
+          return; 
+      }
+      
       fetchActiveRooms();
       const interval = setInterval(fetchActiveRooms, 5000);
       return () => clearInterval(interval);
     }
   }, [uiState]);
+
+  const [pendingRoomId, setPendingRoomId] = useState(null);
+
+  const confirmReturnRoom = () => {
+      if (pendingRoomId) {
+          // Analytics: Track "Return to Room" conversion
+          console.log('[Analytics] User returned to room:', pendingRoomId);
+          setRoomId(pendingRoomId);
+          setUiState('setup');
+          setPendingRoomId(null);
+      }
+  };
+
+  const cancelReturnRoom = () => {
+      // Analytics: Track "Cancel Return"
+      console.log('[Analytics] User cancelled return to room');
+      setPendingRoomId(null);
+      // Clear URL param
+      const url = new URL(window.location);
+      url.searchParams.delete('roomId');
+      window.history.pushState({}, '', url);
+      // Refresh rooms list
+      fetchActiveRooms();
+  };
 
   const fetchActiveRooms = () => {
     setIsLoadingRooms(true);
@@ -85,6 +175,13 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const mediaRecorderRef = useRef(null);
   const recordedChunksRef = useRef([]);
   const volumeIntervalRef = useRef(null);
+  const isJoiningRef = useRef(false);
+
+  useEffect(() => {
+    if (uiState === 'meeting') {
+      isJoiningRef.current = false;
+    }
+  }, [uiState]);
 
   useEffect(() => {
     // Fetch role definitions
@@ -111,6 +208,18 @@ function WebRTCMeeting({ onBack, addToast, username }) {
       console.error('Signaling server connection error:', err);
       setSignalingState('disconnected');
       addToast(t('signaling_error'), 'error');
+    });
+
+    socket.on('error', (msg) => {
+        addToast(msg, 'error');
+        // If password error, maybe stay in setup or go back?
+        // Usually, we haven't joined the room yet if password failed.
+        // We are likely in 'setup' state but waiting for 'role-assigned' or 'user-connected'.
+        // If join fails, we should probably stop the stream and go back to setup or stay there to retry.
+        
+        // For now, just show error. The user is stuck in 'setup' view (loading overlay is not there yet, or is it?)
+        // The confirmJoin function sets isJoiningRef.current = true.
+        // We might want to reset that if join failed, but we don't have an explicit 'join-failed' event other than 'error'.
     });
 
     socket.on('role-assigned', (role) => {
@@ -231,6 +340,24 @@ function WebRTCMeeting({ onBack, addToast, username }) {
       }
     });
 
+    socket.on('receive-message', (msg) => {
+        setMessages(prev => [...prev, msg]);
+        if (!isChatOpenRef.current) {
+            setUnreadCount(prev => prev + 1);
+            // Optional: Play a sound or show a small toast
+            if (msg.senderId !== socket.id) {
+                // addToast(t('new_message_from', { name: msg.senderName }), 'info');
+            }
+        } else {
+            // If open, scroll to bottom
+            setTimeout(() => {
+                if (chatScrollRef.current) {
+                    chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+                }
+            }, 100);
+        }
+    });
+
     return () => {
       socket.off('connect');
       socket.off('disconnect');
@@ -246,6 +373,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
       socket.off('offer');
       socket.off('answer');
       socket.off('ice-candidate');
+      socket.off('receive-message');
 
       // Cleanup local media and connections on unmount
       if (localStreamRef.current) {
@@ -285,37 +413,61 @@ function WebRTCMeeting({ onBack, addToast, username }) {
 
   useEffect(() => {
       if (uiState === 'setup') {
-          startPreview();
-      } else {
+          // Add a small delay to ensure DOM is ready or previous cleanup is done
+          const timer = setTimeout(() => {
+              startPreview();
+          }, 100);
+          return () => {
+              clearTimeout(timer);
+              stopPreview();
+          };
+      } 
+      // Do NOT aggressively call stopPreview() in else block for 'meeting' state
+      // because we might have transitioned via confirmJoin which sets up the stream
+      else if (uiState === 'welcome') {
           stopPreview();
       }
   }, [uiState, selectedCameraId, selectedMicId, isLowDataMode]);
 
   const startPreview = async () => {
       try {
+          // Stop any existing tracks first
           if (videoStreamRef.current) {
               videoStreamRef.current.getTracks().forEach(t => t.stop());
+              videoStreamRef.current = null;
           }
           if (audioStreamRef.current) {
               audioStreamRef.current.getTracks().forEach(t => t.stop());
+              audioStreamRef.current = null;
+          }
+
+          if (!isVideoEnabled && !isAudioEnabled) {
+              if (previewVideoRef.current) previewVideoRef.current.srcObject = null;
+              if (volumeIntervalRef.current) clearInterval(volumeIntervalRef.current);
+              setVolumeLevel(0);
+              return;
           }
 
           const constraints = {
-              video: {
+              video: isVideoEnabled ? {
                   deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
-                  width: isLowDataMode ? { ideal: 320 } : { ideal: 1280 },
-                  height: isLowDataMode ? { ideal: 240 } : { ideal: 720 },
-                  frameRate: isLowDataMode ? { ideal: 15 } : { ideal: 30 }
-              },
-              audio: selectedMicId ? { deviceId: { exact: selectedMicId } } : true
+                  width: isLowDataMode ? { ideal: 480 } : (resolution === '1080p' ? { ideal: 1920 } : (resolution === '720p' ? { ideal: 1280 } : { ideal: 640 })),
+                  height: isLowDataMode ? { ideal: 270 } : (resolution === '1080p' ? { ideal: 1080 } : (resolution === '720p' ? { ideal: 720 } : { ideal: 360 })),
+                  frameRate: isLowDataMode ? { ideal: 15 } : { ideal: frameRate },
+                  aspectRatio: { ideal: 1.7777777778 }
+              } : false,
+              audio: isAudioEnabled ? (selectedMicId ? { deviceId: { exact: selectedMicId } } : true) : false
           };
 
           const stream = await navigator.mediaDevices.getUserMedia(constraints);
           
           // Video Preview
-          videoStreamRef.current = new MediaStream(stream.getVideoTracks());
-          if (previewVideoRef.current) {
-              previewVideoRef.current.srcObject = videoStreamRef.current;
+          const videoTrack = stream.getVideoTracks()[0];
+          if (videoTrack) {
+              videoStreamRef.current = new MediaStream([videoTrack]);
+              if (previewVideoRef.current) {
+                  previewVideoRef.current.srcObject = videoStreamRef.current;
+              }
           }
 
           // Audio Volume Meter
@@ -335,7 +487,11 @@ function WebRTCMeeting({ onBack, addToast, username }) {
               
               volumeIntervalRef.current = setInterval(() => {
                   analyser.getByteFrequencyData(dataArray);
-                  const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+                  let sum = 0;
+                  for(let i = 0; i < dataArray.length; i++) {
+                      sum += dataArray[i];
+                  }
+                  const average = sum / dataArray.length;
                   setVolumeLevel(Math.min(100, average * 2)); // Amplify a bit
               }, 100);
           }
@@ -347,7 +503,8 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   };
 
   const stopPreview = () => {
-      if (videoStreamRef.current) {
+    if (isJoiningRef.current) return;
+    if (videoStreamRef.current) {
           videoStreamRef.current.getTracks().forEach(t => t.stop());
           videoStreamRef.current = null;
       }
@@ -523,21 +680,41 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   };
 
   const confirmJoin = async () => {
-    setUiState('meeting');
-    setJoined(true);
+    // Manually stop preview tracks to prepare for meeting stream
+    if (videoStreamRef.current) {
+        videoStreamRef.current.getTracks().forEach(t => t.stop());
+        videoStreamRef.current = null;
+    }
+    if (audioStreamRef.current) {
+        audioStreamRef.current.getTracks().forEach(t => t.stop());
+        audioStreamRef.current = null;
+    }
 
-    // Initialize local stream with selected devices
+    isJoiningRef.current = true;
+
+    // Initialize local stream with selected devices FIRST before switching UI
+    // This ensures stream is ready when component mounts
     try {
-        const constraints = {
-            video: {
-                deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
-                width: isLowDataMode ? { ideal: 320 } : { ideal: 1280 },
-                height: isLowDataMode ? { ideal: 240 } : { ideal: 720 },
-                frameRate: isLowDataMode ? { ideal: 15 } : { ideal: 30 }
-            },
-            audio: selectedMicId ? { deviceId: { exact: selectedMicId } } : true
-        };
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        let stream;
+        if (!isVideoEnabled && !isAudioEnabled) {
+             stream = new MediaStream();
+        } else {
+             const constraints = {
+                video: isVideoEnabled ? {
+                    deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
+                    width: isLowDataMode ? { ideal: 480 } : (resolution === '1080p' ? { ideal: 1920 } : (resolution === '720p' ? { ideal: 1280 } : { ideal: 640 })),
+                    height: isLowDataMode ? { ideal: 270 } : (resolution === '1080p' ? { ideal: 1080 } : (resolution === '720p' ? { ideal: 720 } : { ideal: 360 })),
+                    frameRate: isLowDataMode ? { ideal: 15 } : { ideal: frameRate },
+                    aspectRatio: { ideal: 1.7777777778 }
+                } : false,
+                audio: isAudioEnabled ? (selectedMicId ? { deviceId: { exact: selectedMicId } } : true) : false
+            };
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+        }
+
+        // IMPORTANT: Ensure tracks are enabled explicitly, just in case
+        stream.getTracks().forEach(t => t.enabled = true);
+
         localStreamRef.current = stream;
         
         // Split for refs
@@ -546,24 +723,40 @@ function WebRTCMeeting({ onBack, addToast, username }) {
         
         if (videoTrack) {
             videoStreamRef.current = new MediaStream([videoTrack]);
-            setIsVideoEnabled(true);
         }
         if (audioTrack) {
             audioStreamRef.current = new MediaStream([audioTrack]);
-            setIsAudioEnabled(true);
         }
+        
+        // Update URL to persist room state on refresh
+        const url = new URL(window.location);
+        url.searchParams.set('roomId', roomId);
+        window.history.pushState({}, '', url);
 
-        if (localVideoRef.current) {
-            localVideoRef.current.srcObject = stream;
+        // Now switch UI
+        setUiState('meeting');
+        setJoined(true);
+
+        // Force a re-render/ref update cycle for video element
+        setTimeout(() => {
+            if (localVideoRef.current && localStreamRef.current) {
+                console.log("Forcing video srcObject assignment");
+                localVideoRef.current.srcObject = localStreamRef.current;
+            }
+        }, 100);
+        
+        // Emit join after stream is ready so tracks can be added to peer connection immediately
+        if (nickname.trim()) {
+            localStorage.setItem('username', nickname.trim());
         }
+        socket.emit('join-room', roomId, socket.id, nickname || 'Anonymous');
 
     } catch (e) {
         console.error("Error getting user media on join:", e);
         addToast(t('device_access_error'), "error");
+        isJoiningRef.current = false;
+        // Do not switch to meeting state if media fails
     }
-
-    // Emit join after stream is ready so tracks can be added to peer connection immediately
-    socket.emit('join-room', roomId, socket.id, username || 'Anonymous');
   };
 
   const toggleLowDataMode = async () => {
@@ -582,17 +775,15 @@ function WebRTCMeeting({ onBack, addToast, username }) {
     }
 
     try {
-        // Stop current video track
-        if (videoStreamRef.current) {
-             videoStreamRef.current.getTracks().forEach(t => t.stop());
-        }
-
         const constraints = {
             video: {
                 deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
-                width: newMode ? { ideal: 320 } : { ideal: 1280 },
-                height: newMode ? { ideal: 240 } : { ideal: 720 },
-                frameRate: newMode ? { ideal: 15 } : { ideal: 30 }
+                // Use 16:9 aspect ratio for low data mode to avoid cropping/zooming
+                // 480x270 is 16:9. 320x180 is also 16:9.
+                width: newMode ? { ideal: 480 } : (resolution === '1080p' ? { ideal: 1920 } : (resolution === '720p' ? { ideal: 1280 } : { ideal: 640 })),
+                height: newMode ? { ideal: 270 } : (resolution === '1080p' ? { ideal: 1080 } : (resolution === '720p' ? { ideal: 720 } : { ideal: 360 })),
+                frameRate: newMode ? { ideal: 15 } : { ideal: frameRate },
+                aspectRatio: { ideal: 1.7777777778 } // Try to maintain 16:9
             },
             audio: false 
         };
@@ -601,6 +792,20 @@ function WebRTCMeeting({ onBack, addToast, username }) {
         const newVideoTrack = stream.getVideoTracks()[0];
 
         if (newVideoTrack) {
+            // Apply bandwidth constraints if in low data mode
+            if (newMode) {
+               try {
+                 await newVideoTrack.applyConstraints({
+                    width: { ideal: 480 },
+                    height: { ideal: 270 },
+                    frameRate: 15,
+                    aspectRatio: 1.7777777778
+                 });
+               } catch (e) {
+                 console.warn("Could not apply strict constraints, falling back to soft constraints", e);
+               }
+            }
+
             videoStreamRef.current = new MediaStream([newVideoTrack]);
             
             // Update local stream ref (which might have audio too)
@@ -611,6 +816,8 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                     oldVideoTrack.stop();
                 }
                 localStreamRef.current.addTrack(newVideoTrack);
+            } else {
+                 localStreamRef.current = new MediaStream([newVideoTrack]);
             }
 
             // Update local video preview
@@ -623,6 +830,11 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                 const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
                 if (sender) {
                     sender.replaceTrack(newVideoTrack);
+                } else {
+                    // If no sender, we might need to add track (unlikely if isVideoEnabled was true)
+                    if (localStreamRef.current) {
+                        pc.addTrack(newVideoTrack, localStreamRef.current);
+                    }
                 }
             });
             
@@ -633,6 +845,45 @@ function WebRTCMeeting({ onBack, addToast, username }) {
         console.error("Error switching quality:", e);
         addToast(t('switch_quality_error'), "error");
     }
+  };
+
+  useEffect(() => {
+    socket.on('request-high-quality', async () => {
+        addToast(t('high_quality_requested'), "info");
+        // If in low data mode, turn it off
+        if (isLowDataMode) {
+             toggleLowDataMode();
+        } else {
+            // Force high quality constraints if not already
+            try {
+                if (videoStreamRef.current) {
+                     const track = videoStreamRef.current.getVideoTracks()[0];
+                     if (track) {
+                         await track.applyConstraints({
+                             width: { ideal: 1280, min: 720 },
+                             height: { ideal: 720, min: 480 },
+                             frameRate: { ideal: 30, min: 20 }
+                         });
+                     }
+                }
+            } catch (e) {
+                console.error("Failed to apply high quality", e);
+            }
+        }
+    });
+
+    return () => {
+        socket.off('request-high-quality');
+    };
+  }, [isLowDataMode, videoStreamRef.current]); // Add dependencies
+
+  const requestHighQuality = (targetUserId) => {
+      if (!hasPermission('canManageRoles')) { // Assuming host/admin can do this
+          addToast(t('permission_denied'), 'error');
+          return;
+      }
+      socket.emit('request-high-quality', { targetUserId });
+      addToast(t('high_quality_request_sent'), 'success');
   };
 
   const hasPermission = (permissionName) => {
@@ -673,24 +924,82 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   };
 
   const handleCloseRoom = () => {
-    socket.emit('close-room');
+    // If I am the creator, confirm if I want to close the room for everyone or just leave
+    if (isCreator) {
+        if (window.confirm(t('confirm_close_room') || 'Close room for everyone?')) {
+            socket.emit('close-room');
+            onBack();
+        } else {
+             // Just leave? Maybe user clicked cancel but meant to leave.
+             // Or offer two buttons in a custom dialog.
+             // For now, let's assume if they cancel "Close Room", they might want to "Leave Room"
+             if (window.confirm(t('confirm_leave_room') || 'Just leave the room?')) {
+                 window.location.reload(); // Simple leave by refresh/redirect
+             }
+        }
+    } else {
+        if (window.confirm(t('confirm_leave_room') || 'Leave the room?')) {
+            onBack();
+        }
+    }
   };
 
-  const toggleAudio = () => {
-      if (isAudioEnabled) {
-          if (localStreamRef.current) {
-              localStreamRef.current.getAudioTracks().forEach(track => track.enabled = false);
-          }
-          setIsAudioEnabled(false);
-      } else {
-          if (localStreamRef.current) {
-              localStreamRef.current.getAudioTracks().forEach(track => track.enabled = true);
-          }
-          setIsAudioEnabled(true);
+  const sendMessage = (e) => {
+       e.preventDefault();
+       if (!newMessage.trim()) return;
+       
+       socket.emit('send-message', { roomId, message: newMessage });
+       setNewMessage('');
+   };
+
+   const handleFileSelect = (e) => {
+       const file = e.target.files[0];
+       if (!file) return;
+
+       // Size limit check (e.g. 50MB)
+       if (file.size > 50 * 1024 * 1024) {
+           addToast(t('file_too_large') || 'File too large (Max 50MB)', 'error');
+           return;
+       }
+
+       const reader = new FileReader();
+       reader.onload = () => {
+           const fileData = {
+               name: file.name,
+               type: file.type,
+               size: file.size,
+               data: reader.result // Base64
+           };
+           socket.emit('send-file', { roomId, file: fileData });
+       };
+       reader.readAsDataURL(file);
+       
+       // Reset input
+       e.target.value = null;
+   };
+ 
+   const toggleAudio = () => {
+      // Toggle audio state
+      const newAudioState = !isAudioEnabled;
+      
+      // Update local stream tracks
+      if (localStreamRef.current) {
+          localStreamRef.current.getAudioTracks().forEach(track => {
+              track.enabled = newAudioState;
+          });
       }
+      
+      // Also update separate audio stream ref if it exists
+      if (audioStreamRef.current) {
+          audioStreamRef.current.getAudioTracks().forEach(track => {
+              track.enabled = newAudioState;
+          });
+      }
+
+      setIsAudioEnabled(newAudioState);
   };
 
-  const toggleVideo = () => {
+  const toggleVideo = async () => {
       if (isSharing) {
           // If sharing, only toggle the camera track state (which is currently not being sent)
           // so it's ready when sharing stops
@@ -704,15 +1013,89 @@ function WebRTCMeeting({ onBack, addToast, username }) {
       }
 
       if (isVideoEnabled) {
+          // Turning video OFF
           if (localStreamRef.current) {
-              localStreamRef.current.getVideoTracks().forEach(track => track.enabled = false);
+              localStreamRef.current.getVideoTracks().forEach(track => {
+                  track.enabled = false;
+                  track.stop(); // Stop the track to release the camera
+              });
+              // Remove video tracks from stream to be clean
+              localStreamRef.current.getVideoTracks().forEach(track => localStreamRef.current.removeTrack(track));
+          }
+          if (videoStreamRef.current) {
+               videoStreamRef.current.getTracks().forEach(t => t.stop());
+               videoStreamRef.current = null;
+          }
+          // Update setup preview
+          if (uiState === 'setup' && previewVideoRef.current) {
+              previewVideoRef.current.srcObject = null;
           }
           setIsVideoEnabled(false);
       } else {
-          if (localStreamRef.current) {
-              localStreamRef.current.getVideoTracks().forEach(track => track.enabled = true);
+          // Turning video ON
+          try {
+              const constraints = {
+                video: {
+                    deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
+                    width: isLowDataMode ? { ideal: 480 } : (resolution === '1080p' ? { ideal: 1920 } : (resolution === '720p' ? { ideal: 1280 } : { ideal: 640 })),
+                    height: isLowDataMode ? { ideal: 270 } : (resolution === '1080p' ? { ideal: 1080 } : (resolution === '720p' ? { ideal: 720 } : { ideal: 360 })),
+                    frameRate: isLowDataMode ? { ideal: 15 } : { ideal: frameRate },
+                    aspectRatio: { ideal: 1.7777777778 }
+                },
+                audio: false
+            };
+            
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            const newVideoTrack = stream.getVideoTracks()[0];
+            
+            if (newVideoTrack) {
+                videoStreamRef.current = new MediaStream([newVideoTrack]);
+                
+                // Update setup preview
+                if (uiState === 'setup' && previewVideoRef.current) {
+                    previewVideoRef.current.srcObject = videoStreamRef.current;
+                }
+
+                if (localStreamRef.current) {
+                    localStreamRef.current.addTrack(newVideoTrack);
+                } else {
+                    localStreamRef.current = new MediaStream([newVideoTrack]);
+                }
+                
+                // Update preview
+                if (localVideoRef.current) {
+                    localVideoRef.current.srcObject = localStreamRef.current;
+                }
+                
+                // Replace track for peers
+                Object.entries(peersRef.current).forEach(([peerId, pc]) => {
+                    const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+                    if (sender) {
+                        sender.replaceTrack(newVideoTrack);
+                    } else {
+                         // If no video sender existed (e.g. started audio only), we might need to add track
+                         // Re-negotiation needed for new track usually, but simple addTrack might work if transceivers pre-negotiated
+                         if (localStreamRef.current) {
+                             pc.addTrack(newVideoTrack, localStreamRef.current);
+                             // Note: In strict WebRTC, adding a track requires renegotiation (offer/answer exchange)
+                             // Ideally we should call createOffer() here again.
+                             pc.createOffer().then(offer => pc.setLocalDescription(offer)).then(() => {
+                                 socket.emit('offer', {
+                                     target: peerId, // Use key from entries
+                                     sdp: pc.localDescription,
+                                     sender: socket.id
+                                 });
+                             });
+                         }
+                    }
+                });
+                
+                setIsVideoEnabled(true);
+            }
+          } catch (e) {
+              console.error("Error restarting video:", e);
+              addToast(t('device_access_error'), "error");
           }
-          setIsVideoEnabled(true);
       }
   };
 
@@ -898,7 +1281,37 @@ function WebRTCMeeting({ onBack, addToast, username }) {
 
   if (uiState === 'welcome') {
       return (
-        <div className="h-screen bg-gray-950 flex items-center justify-center p-4">
+        <div className="h-screen bg-gray-950 flex items-center justify-center p-4 relative">
+          {/* Return Room Modal */}
+          {pendingRoomId && (
+              <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                  <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 max-w-md w-full shadow-2xl animate-in zoom-in-95 duration-200">
+                      <div className="flex items-center gap-3 mb-4 text-blue-400">
+                          <ArrowUpCircle size={24} />
+                          <h3 className="text-xl font-bold text-white">{t('return_room_title')}</h3>
+                      </div>
+                      <p className="text-gray-300 mb-6 leading-relaxed">
+                          {t('return_room_desc', { roomId: pendingRoomId })}
+                      </p>
+                      <div className="flex justify-end gap-3">
+                              <button 
+                                  onClick={cancelReturnRoom}
+                                  className="px-4 py-2 rounded-xl text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                              >
+                                  {t('ignore_btn')}
+                              </button>
+                              <button 
+                                  onClick={confirmReturnRoom}
+                              className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium shadow-lg shadow-blue-900/20 transition-all flex items-center gap-2"
+                          >
+                              {t('return_btn')}
+                              <ArrowRight size={16} />
+                          </button>
+                      </div>
+                  </div>
+              </div>
+          )}
+
           <div className="flex flex-col md:flex-row gap-8 w-full max-w-5xl">
             {/* Join/Create Section */}
             <div className="bg-gray-900 p-8 rounded-2xl shadow-2xl w-full md:w-1/3 border border-gray-800 flex flex-col">
@@ -966,6 +1379,9 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                                     <div>
                                         <div className="flex items-center gap-2 mb-1">
                                             <span className="font-mono text-lg font-bold text-blue-400">{room.roomId}</span>
+                                            {room.isProtected && (
+                                                <Lock size={14} className="text-yellow-500" title={t('password_protected') || "Password Protected"} />
+                                            )}
                                             {room.creatorName && (
                                                 <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20">
                                                     <Crown size={10} />
@@ -976,7 +1392,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                                         <div className="flex items-center gap-4 text-sm text-gray-400">
                                             <div className="flex items-center gap-1.5">
                                                 <Clock size={14} />
-                                                <span>{new Date(room.createdAt).toLocaleTimeString()}</span>
+                                                <span>{new Date(room.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                                             </div>
                                             <div className="flex items-center gap-1.5">
                                                 <Users size={14} />
@@ -985,7 +1401,12 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                                         </div>
                                     </div>
                                     <button
-                                        onClick={() => joinRoom(room.roomId)}
+                                        onClick={() => {
+                                            setRoomId(room.roomId);
+                                            setUiState('setup');
+                                            // Reset password state when selecting a new room
+                                            setRoomPassword('');
+                                        }}
                                         className="px-4 py-2 bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white rounded-lg text-sm font-medium transition-all opacity-0 group-hover:opacity-100 transform translate-x-2 group-hover:translate-x-0"
                                     >
                                         {t('join_now_btn')}
@@ -1019,9 +1440,46 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                               autoPlay
                               muted
                               playsInline
-                              className="w-full h-full object-cover transform scale-x-[-1]"
+                              className={`w-full h-full object-cover ${!isVideoEnabled ? 'hidden' : ''}`} 
                           />
-                          <div className="absolute bottom-4 left-4 flex gap-2">
+                          {!isVideoEnabled && (
+                              <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+                                  <div className="flex flex-col items-center gap-2">
+                                      <div className="w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center">
+                                          <VideoIcon size={32} className="text-red-500" />
+                                      </div>
+                                      <p className="text-gray-500 font-medium">{t('camera_off')}</p>
+                                  </div>
+                              </div>
+                          )}
+                          
+                          {/* Control Overlay */}
+                          <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-4 z-20">
+                              <button
+                                  onClick={toggleAudio}
+                                  className={`p-3 rounded-full transition-all duration-200 ${
+                                      isAudioEnabled 
+                                      ? 'bg-gray-700/80 hover:bg-gray-600 text-white' 
+                                      : 'bg-red-500/80 hover:bg-red-600 text-white'
+                                  }`}
+                                  title={isAudioEnabled ? t('mute_mic_tooltip') : t('unmute_mic_tooltip')}
+                              >
+                                  {isAudioEnabled ? <Mic size={20} /> : <MicOff size={20} />}
+                              </button>
+                              <button
+                                  onClick={toggleVideo}
+                                  className={`p-3 rounded-full transition-all duration-200 ${
+                                      isVideoEnabled 
+                                      ? 'bg-gray-700/80 hover:bg-gray-600 text-white' 
+                                      : 'bg-red-500/80 hover:bg-red-600 text-white'
+                                  }`}
+                                  title={isVideoEnabled ? t('stop_video_tooltip') : t('start_video_tooltip')}
+                              >
+                                  {isVideoEnabled ? <VideoIcon size={20} /> : <VideoIcon size={20} />}
+                              </button>
+                          </div>
+
+                          <div className="absolute bottom-4 left-4 flex gap-2 z-10 hidden"> {/* Hidden because we have main controls now */}
                               <div className="bg-black/50 backdrop-blur px-3 py-1 rounded-full flex items-center gap-2">
                                   {volumeLevel > 5 ? <Mic size={14} className="text-green-400" /> : <MicOff size={14} className="text-red-400" />}
                                   <div className="w-16 h-1 bg-gray-700 rounded-full overflow-hidden">
@@ -1043,6 +1501,34 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                       </div>
 
                       <div className="space-y-4">
+                          <div>
+                              <label className="block text-sm font-medium text-gray-400 mb-2">{t('enter_name_placeholder')}</label>
+                              <div className="relative">
+                                  <input
+                                      type="text"
+                                      value={nickname}
+                                      onChange={(e) => setNickname(e.target.value)}
+                                      placeholder={t('enter_name_placeholder')}
+                                      className="w-full pl-10 pr-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                                  />
+                                  <Users size={18} className="absolute left-3 top-3.5 text-gray-400" />
+                              </div>
+                          </div>
+
+                          <div>
+                              <label className="block text-sm font-medium text-gray-400 mb-2">{t('room_password_optional') || 'Room Password (Optional)'}</label>
+                              <div className="relative">
+                                  <input
+                                      type="password"
+                                      value={roomPassword}
+                                      onChange={(e) => setRoomPassword(e.target.value)}
+                                      placeholder={t('room_password_placeholder') || 'Set for new, enter for existing'}
+                                      className="w-full pl-10 pr-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                                  />
+                                  <Lock size={18} className="absolute left-3 top-3.5 text-gray-400" />
+                              </div>
+                          </div>
+
                           <div>
                               <label className="block text-sm font-medium text-gray-400 mb-2">{t('camera_label')}</label>
                               <div className="relative">
@@ -1087,6 +1573,35 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                                   <span className={`${isLowDataMode ? 'translate-x-6' : 'translate-x-1'} inline-block h-4 w-4 transform rounded-full bg-white transition-transform`} />
                               </button>
                           </div>
+
+                          {!isLowDataMode && (
+                              <div className="grid grid-cols-2 gap-4">
+                                  <div>
+                                      <label className="block text-sm font-medium text-gray-400 mb-2">{t('resolution_label') || 'Resolution'}</label>
+                                      <select
+                                          value={resolution}
+                                          onChange={(e) => setResolution(e.target.value)}
+                                          className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                      >
+                                          <option value="360p">360p (SD)</option>
+                                          <option value="720p">720p (HD)</option>
+                                          <option value="1080p">1080p (FHD)</option>
+                                      </select>
+                                  </div>
+                                  <div>
+                                      <label className="block text-sm font-medium text-gray-400 mb-2">{t('framerate_label') || 'Frame Rate'}</label>
+                                      <select
+                                          value={frameRate}
+                                          onChange={(e) => setFrameRate(Number(e.target.value))}
+                                          className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                      >
+                                          <option value="15">15 FPS</option>
+                                          <option value="30">30 FPS</option>
+                                          <option value="60">60 FPS</option>
+                                      </select>
+                                  </div>
+                              </div>
+                          )}
                       </div>
 
                       <div className="flex gap-4 pt-4">
@@ -1201,31 +1716,158 @@ function WebRTCMeeting({ onBack, addToast, username }) {
             </div>
 
             {/* Main Content Area - Grid Layout */}
-            <div className="flex-1 p-4 overflow-y-auto bg-[#121212]">
-                <div className={`grid gap-4 h-full w-full ${
-                    Object.keys(remoteStreams).length === 0 ? 'grid-cols-1' :
-                    Object.keys(remoteStreams).length === 1 ? 'grid-cols-1 md:grid-cols-2' :
-                    'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+            <div className="flex-1 p-4 overflow-y-auto bg-[#121212] flex items-center justify-center relative">
+                {/* Chat Sidebar */}
+                {isChatOpen && (
+                    <div className="absolute right-4 top-4 bottom-4 w-80 bg-gray-900/95 backdrop-blur-xl border border-gray-800 rounded-2xl shadow-2xl flex flex-col z-40 animate-in slide-in-from-right-10 duration-200 overflow-hidden">
+                        <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
+                            <h3 className="font-bold text-white flex items-center gap-2">
+                                <MessageSquare size={18} className="text-blue-500" />
+                                {t('chat_title') || 'Chat'}
+                            </h3>
+                            <button 
+                                onClick={() => setIsChatOpen(false)}
+                                className="text-gray-400 hover:text-white hover:bg-gray-800 p-1 rounded-lg transition-colors"
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+                        
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar" ref={chatScrollRef}>
+                            {messages.length === 0 ? (
+                                <div className="h-full flex flex-col items-center justify-center text-gray-500 text-sm opacity-60">
+                                    <MessageSquare size={32} className="mb-2 opacity-50" />
+                                    <p>{t('no_messages') || 'No messages yet'}</p>
+                                    <p className="text-xs">{t('start_conversation') || 'Start the conversation!'}</p>
+                                </div>
+                            ) : (
+                                messages.map(msg => {
+                                    const isMe = msg.senderId === socket.id;
+                                    const isFile = msg.type === 'file';
+                                    
+                                    return (
+                                        <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <span className="text-[10px] text-gray-500 font-medium">
+                                                    {isMe ? (t('you') || 'You') : msg.senderName}
+                                                </span>
+                                                <span className="text-[10px] text-gray-600">
+                                                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                </span>
+                                            </div>
+                                            <div className={`px-3 py-2 rounded-2xl max-w-[85%] text-sm break-words shadow-sm ${
+                                                isMe 
+                                                ? 'bg-blue-600 text-white rounded-tr-none' 
+                                                : 'bg-gray-800 text-gray-200 border border-gray-700 rounded-tl-none'
+                                            }`}>
+                                                {isFile ? (
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="p-2 bg-white/10 rounded-lg">
+                                                            <FileText size={24} />
+                                                        </div>
+                                                        <div className="flex flex-col overflow-hidden">
+                                                            <span className="font-medium truncate max-w-[150px]" title={msg.file.name}>{msg.file.name}</span>
+                                                            <span className="text-xs opacity-70">{(msg.file.size / 1024).toFixed(1)} KB</span>
+                                                        </div>
+                                                        <a 
+                                                            href={msg.file.data} 
+                                                            download={msg.file.name}
+                                                            className="p-2 bg-white/20 hover:bg-white/30 rounded-full transition-colors ml-2"
+                                                            title={t('download_file') || 'Download'}
+                                                        >
+                                                            <Download size={16} />
+                                                        </a>
+                                                    </div>
+                                                ) : (
+                                                    msg.content
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                        
+                        <form onSubmit={sendMessage} className="p-3 border-t border-gray-800 bg-gray-900/50">
+                            <div className="relative flex items-center gap-2">
+                                <input 
+                                    type="file" 
+                                    ref={fileInputRef} 
+                                    className="hidden" 
+                                    onChange={handleFileSelect}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
+                                    title={t('attach_file') || 'Attach file'}
+                                >
+                                    <Paperclip size={20} />
+                                </button>
+                                <input 
+                                    value={newMessage} 
+                                    onChange={e => setNewMessage(e.target.value)} 
+                                    className="w-full bg-gray-950 border border-gray-700 text-white text-sm rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder-gray-600" 
+                                    placeholder={t('type_message_placeholder') || 'Type a message...'} 
+                                />
+                                <button 
+                                    type="submit" 
+                                    disabled={!newMessage.trim()}
+                                    className="p-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors"
+                                >
+                                    <Send size={18} />
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                )}
+
+                <div className={`grid gap-4 w-full transition-all duration-300 ${
+                    isChatOpen ? 'pr-0 md:pr-80' : ''
+                } ${
+                    Object.keys(remoteStreams).length === 0 
+                        ? 'h-full grid-cols-1 max-w-5xl mx-auto' 
+                        : Object.keys(remoteStreams).length === 1 
+                            ? 'h-full grid-cols-1 md:grid-cols-2 max-w-7xl mx-auto' 
+                            : 'h-full grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
                 }`}>
                     
                     {/* Local User */}
-                    <div className="relative bg-gray-900 rounded-2xl overflow-hidden border border-gray-800 shadow-xl flex flex-col">
+                    <div className="relative bg-gray-900 rounded-2xl overflow-hidden border border-gray-800 shadow-xl flex flex-col aspect-video max-h-[calc(100vh-160px)] group">
                         <div className="absolute top-4 left-4 z-10 bg-black/40 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 flex items-center gap-2">
                             <span className="text-xs font-medium text-white">{t('you')}</span>
                             {!isAudioEnabled && <MicOff size={12} className="text-red-500" />}
                         </div>
                         
+                        {/* Mirror Toggle Button */}
+                        <button
+                             onClick={() => setIsMirrored(!isMirrored)}
+                             className="absolute top-4 right-4 z-20 p-2 bg-black/40 hover:bg-black/60 backdrop-blur-md text-white rounded-lg border border-white/10 opacity-0 group-hover:opacity-100 transition-all"
+                             title={t('toggle_mirror') || 'Toggle Mirror'}
+                        >
+                            <FlipHorizontal size={16} className={isMirrored ? "text-blue-400" : "text-white"} />
+                        </button>
+
                         <div className="flex-1 relative flex items-center justify-center bg-gray-950">
                             <video
-                                ref={localVideoRef}
+                                ref={el => {
+                                    localVideoRef.current = el;
+                                    // Only assign srcObject if el exists and we have a stream
+                                    // And avoid resetting if it's already the same stream to prevent flicker/pause
+                                    if (el && localStreamRef.current) {
+                                        if (el.srcObject !== localStreamRef.current) {
+                                            el.srcObject = localStreamRef.current;
+                                        }
+                                    }
+                                }}
                                 autoPlay
                                 playsInline
                                 muted
-                                className={`w-full h-full object-contain ${!isSharing && !isAudioEnabled ? 'hidden' : ''}`}
+                                className={`w-full h-full object-contain ${isMirrored && !isSharing ? 'transform scale-x-[-1]' : ''} ${!isSharing && !isVideoEnabled ? 'hidden' : ''}`}
                             />
                             
                             {/* Avatar / Placeholder when no video/sharing */}
-                            {(!isSharing && (!localStreamRef.current || localStreamRef.current.getVideoTracks().length === 0)) && (
+                            {(!isSharing && (!localStreamRef.current || localStreamRef.current.getVideoTracks().length === 0 || !isVideoEnabled)) && (
                                 <div className="flex flex-col items-center justify-center">
                                     <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-blue-600 to-purple-600 flex items-center justify-center text-3xl font-bold text-white shadow-lg mb-4">
                                         {t('me_placeholder')}
@@ -1238,7 +1880,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
 
                         {/* Remote Users */}
                     {Object.entries(remoteStreams).map(([userId, stream]) => (
-                        <div key={userId} className="relative bg-gray-900 rounded-2xl overflow-hidden border border-gray-800 shadow-xl flex flex-col group">
+                        <div key={userId} className="relative bg-gray-900 rounded-2xl overflow-hidden border border-gray-800 shadow-xl flex flex-col group aspect-video max-h-[calc(100vh-160px)]">
                             <div className="absolute top-4 left-4 z-10 bg-black/40 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 flex items-center gap-2">
                                 <span className="text-xs font-medium text-white">{t('user_label', { userId: userId.slice(0, 4) })}</span>
                                 {/* Remote Role Badge */}
@@ -1281,6 +1923,15 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                                             title={t('mute_user_tooltip')}
                                         >
                                             <VolumeX size={14} />
+                                        </button>
+                                    )}
+                                    {hasPermission('canManageRoles') && (
+                                        <button
+                                            onClick={() => requestHighQuality(userId)}
+                                            className="p-2 bg-green-600/80 hover:bg-green-600 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105"
+                                            title={t('request_hq_tooltip')}
+                                        >
+                                            <ArrowUpCircle size={14} />
                                         </button>
                                     )}
                                 </div>
@@ -1372,6 +2023,24 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                     >
                         <SignalLow size={20} />
                         <span className="text-[10px] font-medium whitespace-nowrap overflow-hidden text-ellipsis w-full text-center">{t('low_data_mode')}</span>
+                    </button>
+
+                    <button
+                        onClick={() => setIsChatOpen(!isChatOpen)}
+                        className={`p-3 rounded-xl transition-all duration-200 flex flex-col items-center gap-1 w-20 relative ${
+                            isChatOpen 
+                            ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' 
+                            : 'bg-gray-700/50 hover:bg-gray-600 text-white'
+                        }`}
+                        title={t('chat_btn') || 'Chat'}
+                    >
+                        <MessageSquare size={20} />
+                        <span className="text-[10px] font-medium">{t('chat_btn') || 'Chat'}</span>
+                        {unreadCount > 0 && (
+                            <span className="absolute top-1 right-1 bg-red-500 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center border border-gray-800">
+                                {unreadCount > 9 ? '9+' : unreadCount}
+                            </span>
+                        )}
                     </button>
 
                     <div className="w-px h-8 bg-gray-700 mx-2"></div>

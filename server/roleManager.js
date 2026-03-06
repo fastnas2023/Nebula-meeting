@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = process.env.DATA_DIR || __dirname;
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const ROLES_FILE = path.join(DATA_DIR, 'roles.json');
 const LOGS_FILE = path.join(DATA_DIR, 'audit_logs.json');
 

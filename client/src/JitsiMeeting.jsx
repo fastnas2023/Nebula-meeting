@@ -9,9 +9,9 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
   const { t } = useTranslation();
   const jitsiContainerRef = useRef(null);
   const [roomName, setRoomName] = useState('');
+  const [displayName, setDisplayName] = useState(username || localStorage.getItem('username') || '');
   const [meetingStarted, setMeetingStarted] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [showWarning, setShowWarning] = useState(false);
   const apiRef = useRef(null);
 
   // Generate a random room name on mount
@@ -29,6 +29,9 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
 
   const startMeeting = (name) => {
     const room = name || roomName;
+    if (displayName.trim()) {
+        localStorage.setItem('username', displayName.trim());
+    }
     setMeetingStarted(true);
 
     // Wait for DOM to update
@@ -40,9 +43,6 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
         }
 
         const domain = import.meta.env.VITE_JITSI_DOMAIN || 'meet.jit.si';
-        if (domain === 'meet.jit.si') {
-            setShowWarning(true);
-        }
         const options = {
             roomName: room,
             width: '100%',
@@ -54,10 +54,14 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
                 theme: {
                     default: 'dark'
                 },
-                // Attempt to hide branding
+                // Hide branding and promotion
                 hideConferenceTimer: false,
-                subject: ' ', // Hide room name if possible
+                subject: ' ',
                 disableDeepLinking: true,
+                // Disable third-party requests to avoid 5-minute limit warning on some deployments
+                // Note: The 5-minute limit is a policy of meet.jit.si for anonymous users without auth.
+                // We cannot bypass it client-side if using their public server.
+                // We can only inform the user or use a self-hosted instance.
             },
             interfaceConfigOverwrite: {
                 TOOLBAR_BUTTONS: [
@@ -80,7 +84,7 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
                 MOBILE_APP_PROMO: false,
             },
             userInfo: {
-                displayName: username || t('guest_user')
+                displayName: displayName || t('guest_user')
             }
         };
 
@@ -133,17 +137,6 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
 
         {/* Content */}
         <div className="flex-1 relative overflow-hidden">
-            {meetingStarted && showWarning && (
-                <div className="absolute top-0 left-0 w-full z-50 bg-orange-600/90 text-white px-4 py-2 text-sm flex justify-between items-center backdrop-blur-sm shadow-md">
-                    <div className="flex items-center gap-2">
-                        <AlertTriangle size={16} />
-                        <span>{t('jitsi_public_warning')}</span>
-                    </div>
-                    <button onClick={() => setShowWarning(false)} className="hover:bg-white/20 p-1 rounded transition">
-                        <X size={16}/>
-                    </button>
-                </div>
-            )}
             {!meetingStarted ? (
                 <div className="flex flex-col items-center justify-center min-h-[calc(100vh-88px)] p-6 relative">
                     {/* Background Elements */}
@@ -204,8 +197,18 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
 
                                 <div className="mt-auto space-y-4">
                                     <div className="relative">
+                                        <input
+                                            type="text"
+                                            value={displayName}
+                                            onChange={(e) => setDisplayName(e.target.value)}
+                                            placeholder={t('enter_name_placeholder')}
+                                            className="w-full bg-gray-950/50 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:border-pink-500 focus:ring-1 focus:ring-pink-500 outline-none transition-all font-mono mb-3"
+                                            onClick={(e) => e.stopPropagation()}
+                                        />
+                                    </div>
+                                    <div className="relative">
                                         <input 
-                                            type="text" 
+                                            type="text"  
                                             value={roomName}
                                             placeholder={t('enter_room_name_placeholder')} 
                                             className="w-full bg-gray-950/50 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:border-pink-500 focus:ring-1 focus:ring-pink-500 outline-none transition-all font-mono"
@@ -254,15 +257,20 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
                     </div>
                 </div>
             ) : (
-                <div className="w-full h-full relative bg-black">
+                <div className="w-full h-full relative bg-black flex flex-col">
+                    {/* Warning Banner for Jitsi Free Tier */}
+                    <div className="bg-yellow-600/20 border-b border-yellow-600/30 px-4 py-2 flex items-center justify-center gap-2 text-yellow-500 text-xs font-medium z-[101]">
+                        <AlertTriangle size={14} />
+                        <span>{t('jitsi_free_limit_warning')}</span>
+                    </div>
                      <button 
                         onClick={handleClose}
-                        className="absolute top-4 left-4 z-[100] bg-gray-900/80 hover:bg-red-600 text-white p-2 rounded-full backdrop-blur-sm transition-all border border-gray-700 hover:border-red-500"
+                        className="absolute top-14 left-4 z-[100] bg-gray-900/80 hover:bg-red-600 text-white p-2 rounded-full backdrop-blur-sm transition-all border border-gray-700 hover:border-red-500"
                         title={t('leave_meeting_title')}
                     >
                         <LogOut size={20} />
                     </button>
-                    <div ref={jitsiContainerRef} className="w-full h-full"></div>
+                    <div ref={jitsiContainerRef} className="w-full flex-1"></div>
                 </div>
             )}
         </div>
