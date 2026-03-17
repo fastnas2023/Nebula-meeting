@@ -6,6 +6,12 @@ import basicSsl from '@vitejs/plugin-basic-ssl'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss(), basicSsl()],
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    include: ['src/**/*.test.{ts,tsx}'],
+    exclude: ['tests/**', 'node_modules/**'],
+  },
   server: {
     host: '0.0.0.0', // Allow access from local IP
     port: 5173,
@@ -23,5 +29,5 @@ export default defineConfig({
         secure: false,
       },
     },
-  }
+  },
 })

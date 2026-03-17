@@ -195,5 +195,17 @@
   "ignore_btn": "Cancel & Leave",
   "high_quality_requested": "High quality video requested by host",
   "high_quality_request_sent": "Request sent",
-  "request_hq_tooltip": "Request High Quality"
+  "request_hq_tooltip": "Request High Quality",
+  "toggle_mirror": "Toggle Mirror",
+  "fullscreen_video": "Fullscreen",
+  "restore_video": "Restore",
+  "sort_tooltip": "Sort participants",
+  "sort_btn": "Sort",
+  "sort_name_asc": "Name (A → Z)",
+  "sort_name_desc": "Name (Z → A)",
+  "sort_speaking": "Speaking first",
+  "sort_joined": "Join time",
+  "chat_title": "Chat",
+  "no_messages": "No messages yet",
+  "start_conversation": "Start the conversation!"
 }

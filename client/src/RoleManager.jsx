@@ -41,7 +41,7 @@ const RoleManager = ({ onBack }) => {
         setSelectedRole(Object.keys(data)[0]);
       }
       setLoading(false);
-    } catch (err) {
+    } catch (_err) {
       setError('Failed to fetch roles');
       setLoading(false);
     }
@@ -90,7 +90,7 @@ const RoleManager = ({ onBack }) => {
       setSaveStatus('success');
       setTimeout(() => setSaveStatus(null), 2000);
       fetchLogs(); // Refresh logs
-    } catch (err) {
+    } catch (_err) {
       setSaveStatus('error');
       setTimeout(() => setSaveStatus(null), 2000);
     }

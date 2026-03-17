@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import io from 'socket.io-client';
-import { Mic, MicOff, Monitor, MonitorOff, PhoneOff, Users, Copy, Check, AlertTriangle, Loader2, Wifi, WifiOff, Settings, Video as VideoIcon, Volume2, StopCircle, SignalLow, Shield, UserX, Crown, VolumeX, Edit, RefreshCw, Clock, ArrowUpCircle, ArrowRight, MessageSquare, Send, X, Paperclip, FileText, Download, FlipHorizontal, Lock, Unlock } from 'lucide-react';
+import { Mic, MicOff, Monitor, MonitorOff, PhoneOff, Users, Copy, Check, AlertTriangle, Loader2, Wifi, WifiOff, Settings, Video as VideoIcon, Volume2, StopCircle, SignalLow, Shield, UserX, Crown, VolumeX, Edit, RefreshCw, Clock, ArrowUpCircle, ArrowRight, MessageSquare, Send, X, Paperclip, FileText, Download, FlipHorizontal, Lock, Unlock, Maximize2, Minimize2, ArrowUpDown } from 'lucide-react';
 import { Loader } from './UI';
+import ZoomableVideoContainer from './components/ZoomableVideoContainer';
+import VideoTile from './components/VideoTile';
+import { loadFullscreenTileId, loadSortRule, saveFullscreenTileId, saveSortRule, sortParticipantIds } from './utils/meetingState';
 
 // Use relative path for socket.io to leverage Vite proxy in dev and same-origin in prod
 const socket = io();
@@ -21,7 +24,7 @@ const stunServers = {
 function WebRTCMeeting({ onBack, addToast, username }) {
   const { t } = useTranslation();
   const [roomId, setRoomId] = useState('');
-  const [joined, setJoined] = useState(false);
+  const [_joined, setJoined] = useState(false);
   const [uiState, setUiState] = useState('welcome'); // 'welcome', 'setup', 'meeting'
   const [isSharing, setIsSharing] = useState(false);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
@@ -52,7 +55,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const [myRole, setMyRole] = useState('participant');
   const [roleDefinitions, setRoleDefinitions] = useState({});
   const [remoteRoles, setRemoteRoles] = useState({}); // { socketId: roleName }
-  const [roomCreator, setRoomCreator] = useState(null);
+  const [_roomCreator, setRoomCreator] = useState(null);
   const [isCreator, setIsCreator] = useState(false);
   const [activeRooms, setActiveRooms] = useState([]);
   const [isLoadingRooms, setIsLoadingRooms] = useState(false);
@@ -63,9 +66,19 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const [newMessage, setNewMessage] = useState('');
   const [unreadCount, setUnreadCount] = useState(0);
   const [isMirrored, setIsMirrored] = useState(true);
+  const [fullscreenTileId, setFullscreenTileId] = useState(() => loadFullscreenTileId(localStorage));
+  const [exitingFullscreenTileId, setExitingFullscreenTileId] = useState(null);
+  const [sortRule, setSortRule] = useState(() => loadSortRule(localStorage));
+  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  const [participantMeta, setParticipantMeta] = useState({});
+  const [localJoinedAt, setLocalJoinedAt] = useState(() => Date.now());
+  const [speakingByUserId, setSpeakingByUserId] = useState({});
   const chatScrollRef = useRef(null);
   const isChatOpenRef = useRef(isChatOpen);
   const fileInputRef = useRef(null);
+  const fullscreenHostRef = useRef(null);
+  const fullscreenExitTimerRef = useRef(null);
+  const sortMenuRef = useRef(null);
 
   useEffect(() => {
       isChatOpenRef.current = isChatOpen;
@@ -79,6 +92,103 @@ function WebRTCMeeting({ onBack, addToast, username }) {
           }, 100);
       }
   }, [isChatOpen]);
+
+  const activeFullscreenTileId = fullscreenTileId || exitingFullscreenTileId;
+
+  const orderedTileIds = useMemo(() => {
+      const localName = (nickname || '').trim() || (t('you') || 'You');
+      const inputs = [
+          { id: 'local', name: localName, joinedAt: localJoinedAt, isSpeaking: !!speakingByUserId.local }
+      ];
+
+      Object.keys(remoteStreams).forEach((userId) => {
+          const meta = participantMeta[userId];
+          const name = meta?.name || t('user_label', { userId: userId.slice(0, 4) });
+          const joinedAt = typeof meta?.joinedAt === 'number' ? meta.joinedAt : Number.MAX_SAFE_INTEGER;
+          inputs.push({
+              id: userId,
+              name,
+              joinedAt,
+              isSpeaking: !!speakingByUserId[userId],
+          });
+      });
+
+      return sortParticipantIds(inputs, sortRule);
+  }, [nickname, t, localJoinedAt, speakingByUserId, remoteStreams, participantMeta, sortRule]);
+
+  const exitFullscreen = () => {
+      if (!activeFullscreenTileId) return;
+      if (fullscreenExitTimerRef.current) {
+          clearTimeout(fullscreenExitTimerRef.current);
+          fullscreenExitTimerRef.current = null;
+      }
+      setExitingFullscreenTileId(activeFullscreenTileId);
+      setFullscreenTileId(null);
+      saveFullscreenTileId(localStorage, null);
+      fullscreenExitTimerRef.current = setTimeout(() => {
+          setExitingFullscreenTileId(null);
+          fullscreenExitTimerRef.current = null;
+      }, 280);
+  };
+
+  const enterFullscreen = (tileId) => {
+      if (!tileId) return;
+      if (fullscreenExitTimerRef.current) {
+          clearTimeout(fullscreenExitTimerRef.current);
+          fullscreenExitTimerRef.current = null;
+      }
+      setExitingFullscreenTileId(null);
+      setFullscreenTileId(tileId);
+      saveFullscreenTileId(localStorage, tileId);
+  };
+
+  const toggleFullscreen = (tileId) => {
+      if (!tileId) return;
+      if (activeFullscreenTileId === tileId) {
+          exitFullscreen();
+          return;
+      }
+      enterFullscreen(tileId);
+  };
+
+  const applySortRule = (rule) => {
+      setSortRule(rule);
+      saveSortRule(localStorage, rule);
+  };
+
+  useEffect(() => {
+      if (!isSortMenuOpen) return;
+      const onPointerDown = (e) => {
+          const el = sortMenuRef.current;
+          if (el && e.target instanceof Node && !el.contains(e.target)) {
+              setIsSortMenuOpen(false);
+          }
+      };
+      document.addEventListener('pointerdown', onPointerDown);
+      return () => {
+          document.removeEventListener('pointerdown', onPointerDown);
+      };
+  }, [isSortMenuOpen]);
+
+  useEffect(() => {
+      if (!fullscreenTileId) return;
+      const onKeyDown = (e) => {
+          if (e.key === 'Escape') {
+              exitFullscreen();
+          }
+      };
+      window.addEventListener('keydown', onKeyDown);
+      return () => {
+          window.removeEventListener('keydown', onKeyDown);
+      };
+  }, [fullscreenTileId]);
+
+  useEffect(() => {
+      if (!fullscreenTileId) return;
+      if (fullscreenTileId === 'local') return;
+      if (remoteStreams[fullscreenTileId]) return;
+      exitFullscreen();
+  }, [fullscreenTileId, remoteStreams]);
 
   useEffect(() => {
     // Re-attach local stream to video element when it changes or when we enter meeting view
@@ -96,6 +206,96 @@ function WebRTCMeeting({ onBack, addToast, username }) {
         }
     }
   }, [uiState, isVideoEnabled, isAudioEnabled]);
+
+  useEffect(() => {
+    if (uiState !== 'meeting') return;
+
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) return;
+
+    if (!speakingAudioContextRef.current) {
+      speakingAudioContextRef.current = new AudioContextCtor();
+    }
+    const ctx = speakingAudioContextRef.current;
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch((e) => { void e; });
+    }
+
+    const desiredIds = new Set(['local', ...Object.keys(remoteStreams)]);
+    const detectors = speakingDetectorRef.current;
+
+    const stopDetector = (id) => {
+      const d = detectors[id];
+      if (!d) return;
+      if (d.intervalId) clearInterval(d.intervalId);
+      try { d.source?.disconnect(); } catch (e) { void e; }
+      try { d.analyser?.disconnect(); } catch (e) { void e; }
+      delete detectors[id];
+    };
+
+    Object.keys(detectors).forEach(id => {
+      if (!desiredIds.has(id)) stopDetector(id);
+    });
+
+    const ensureDetector = (id, stream, enabled) => {
+      if (!enabled) {
+        stopDetector(id);
+        if (speakingValueRef.current[id]) {
+          speakingValueRef.current[id] = false;
+          setSpeakingByUserId(prev => ({ ...prev, [id]: false }));
+        }
+        return;
+      }
+
+      const audioTrack = stream?.getAudioTracks?.()[0];
+      if (!audioTrack) {
+        stopDetector(id);
+        return;
+      }
+
+      if (detectors[id]) return;
+
+      const audioStream = new MediaStream([audioTrack]);
+      const source = ctx.createMediaStreamSource(audioStream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const intervalId = setInterval(() => {
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i += 1) sum += dataArray[i];
+        const avg = sum / dataArray.length;
+        const speakingNow = avg > 22;
+        if (speakingValueRef.current[id] !== speakingNow) {
+          speakingValueRef.current[id] = speakingNow;
+          setSpeakingByUserId(prev => ({ ...prev, [id]: speakingNow }));
+        }
+      }, 200);
+
+      detectors[id] = { source, analyser, intervalId };
+    };
+
+    ensureDetector('local', localStreamRef.current, !!isAudioEnabled);
+    Object.entries(remoteStreams).forEach(([id, stream]) => {
+      ensureDetector(id, stream, true);
+    });
+  }, [uiState, remoteStreams, isAudioEnabled]);
+
+  useEffect(() => {
+    if (uiState === 'meeting') return;
+    const detectors = speakingDetectorRef.current;
+    Object.keys(detectors).forEach(id => {
+      const d = detectors[id];
+      if (d?.intervalId) clearInterval(d.intervalId);
+      try { d?.source?.disconnect?.(); } catch (e) { void e; }
+      try { d?.analyser?.disconnect?.(); } catch (e) { void e; }
+      delete detectors[id];
+    });
+    speakingValueRef.current = {};
+    setSpeakingByUserId({});
+  }, [uiState]);
 
   useEffect(() => {
     // Check URL params for room ID
@@ -176,6 +376,9 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const recordedChunksRef = useRef([]);
   const volumeIntervalRef = useRef(null);
   const isJoiningRef = useRef(false);
+  const speakingAudioContextRef = useRef(null);
+  const speakingDetectorRef = useRef({});
+  const speakingValueRef = useRef({});
 
   useEffect(() => {
     if (uiState === 'meeting') {
@@ -281,7 +484,36 @@ function WebRTCMeeting({ onBack, addToast, username }) {
       }
     });
 
-    socket.on('user-connected', (userId) => {
+    socket.on('room-users', (users) => {
+      if (!Array.isArray(users)) return;
+      setParticipantMeta(prev => {
+        const next = { ...prev };
+        users.forEach(u => {
+          if (!u || !u.userId) return;
+          if (u.userId === socket.id) return;
+          next[u.userId] = {
+            name: u.username || 'Anonymous',
+            joinedAt: typeof u.joinedAt === 'number' ? u.joinedAt : Date.now(),
+          };
+        });
+        return next;
+      });
+    });
+
+    socket.on('user-connected', (payload) => {
+      const userId = typeof payload === 'string' ? payload : payload?.userId;
+      if (!userId) return;
+
+      if (typeof payload === 'object' && payload) {
+        setParticipantMeta(prev => ({
+          ...prev,
+          [userId]: {
+            name: payload.username || 'Anonymous',
+            joinedAt: typeof payload.joinedAt === 'number' ? payload.joinedAt : Date.now(),
+          }
+        }));
+      }
+
       console.log('User connected:', userId);
       createPeerConnection(userId, true);
     });
@@ -309,6 +541,18 @@ function WebRTCMeeting({ onBack, addToast, username }) {
         const newRoles = { ...prev };
         delete newRoles[userId];
         return newRoles;
+      });
+
+      setParticipantMeta(prev => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+
+      setSpeakingByUserId(prev => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
       });
     });
 
@@ -368,6 +612,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
       socket.off('room-closed');
       socket.off('user-kicked');
       socket.off('user-muted');
+      socket.off('room-users');
       socket.off('user-connected');
       socket.off('user-disconnected');
       socket.off('offer');
@@ -736,6 +981,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
         // Now switch UI
         setUiState('meeting');
         setJoined(true);
+        setLocalJoinedAt(Date.now());
 
         // Force a re-render/ref update cycle for video element
         setTimeout(() => {
@@ -1626,8 +1872,9 @@ function WebRTCMeeting({ onBack, addToast, username }) {
 
   return (
     <div className="h-screen bg-gray-950 flex flex-col overflow-hidden relative">
+            <div ref={fullscreenHostRef} className={`absolute inset-0 z-[70] ${activeFullscreenTileId ? 'pointer-events-auto' : 'pointer-events-none'}`} />
             {/* Header Status Bar */}
-            <div className="h-16 bg-gray-900/90 backdrop-blur border-b border-gray-800 flex justify-between items-center px-6 z-10">
+            <div className={`h-16 bg-gray-900/90 backdrop-blur border-b border-gray-800 flex justify-between items-center px-6 z-10 transition-opacity duration-200 ${activeFullscreenTileId ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
                 <div className="flex items-center gap-3">
                     <div className="flex items-center gap-2 bg-gray-800/50 px-3 py-1.5 rounded-lg border border-gray-700/50">
                         <Users size={16} className="text-gray-400" />
@@ -1718,7 +1965,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
             {/* Main Content Area - Grid Layout */}
             <div className="flex-1 p-4 overflow-y-auto bg-[#121212] flex items-center justify-center relative">
                 {/* Chat Sidebar */}
-                {isChatOpen && (
+                {isChatOpen && !fullscreenTileId && (
                     <div className="absolute right-4 top-4 bottom-4 w-80 bg-gray-900/95 backdrop-blur-xl border border-gray-800 rounded-2xl shadow-2xl flex flex-col z-40 animate-in slide-in-from-right-10 duration-200 overflow-hidden">
                         <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/50">
                             <h3 className="font-bold text-white flex items-center gap-2">
@@ -1825,6 +2072,8 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                 <div className={`grid gap-4 w-full transition-all duration-300 ${
                     isChatOpen ? 'pr-0 md:pr-80' : ''
                 } ${
+                    fullscreenTileId ? 'opacity-0 pointer-events-none' : ''
+                } ${
                     Object.keys(remoteStreams).length === 0 
                         ? 'h-full grid-cols-1 max-w-5xl mx-auto' 
                         : Object.keys(remoteStreams).length === 1 
@@ -1832,116 +2081,155 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                             : 'h-full grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
                 }`}>
                     
-                    {/* Local User */}
-                    <div className="relative bg-gray-900 rounded-2xl overflow-hidden border border-gray-800 shadow-xl flex flex-col aspect-video max-h-[calc(100vh-160px)] group">
-                        <div className="absolute top-4 left-4 z-10 bg-black/40 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 flex items-center gap-2">
-                            <span className="text-xs font-medium text-white">{t('you')}</span>
-                            {!isAudioEnabled && <MicOff size={12} className="text-red-500" />}
-                        </div>
-                        
-                        {/* Mirror Toggle Button */}
-                        <button
-                             onClick={() => setIsMirrored(!isMirrored)}
-                             className="absolute top-4 right-4 z-20 p-2 bg-black/40 hover:bg-black/60 backdrop-blur-md text-white rounded-lg border border-white/10 opacity-0 group-hover:opacity-100 transition-all"
-                             title={t('toggle_mirror') || 'Toggle Mirror'}
-                        >
-                            <FlipHorizontal size={16} className={isMirrored ? "text-blue-400" : "text-white"} />
-                        </button>
-
-                        <div className="flex-1 relative flex items-center justify-center bg-gray-950">
-                            <video
-                                ref={el => {
-                                    localVideoRef.current = el;
-                                    // Only assign srcObject if el exists and we have a stream
-                                    // And avoid resetting if it's already the same stream to prevent flicker/pause
-                                    if (el && localStreamRef.current) {
-                                        if (el.srcObject !== localStreamRef.current) {
-                                            el.srcObject = localStreamRef.current;
-                                        }
+                    {orderedTileIds.map((tileId) => {
+                        if (tileId === 'local') {
+                            return (
+                                <VideoTile
+                                    key="local"
+                                    tileId="local"
+                                    mode={
+                                        activeFullscreenTileId === 'local'
+                                            ? (fullscreenTileId === 'local' ? 'fullscreen' : 'exiting')
+                                            : 'grid'
                                     }
-                                }}
-                                autoPlay
-                                playsInline
-                                muted
-                                className={`w-full h-full object-contain ${isMirrored && !isSharing ? 'transform scale-x-[-1]' : ''} ${!isSharing && !isVideoEnabled ? 'hidden' : ''}`}
-                            />
-                            
-                            {/* Avatar / Placeholder when no video/sharing */}
-                            {(!isSharing && (!localStreamRef.current || localStreamRef.current.getVideoTracks().length === 0 || !isVideoEnabled)) && (
-                                <div className="flex flex-col items-center justify-center">
-                                    <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-blue-600 to-purple-600 flex items-center justify-center text-3xl font-bold text-white shadow-lg mb-4">
-                                        {t('me_placeholder')}
-                                    </div>
-                                    <p className="text-gray-500 text-sm">{t('camera_off')}</p>
-                                </div>
-                            )}
-                        </div>
-                    </div>
+                                    controlsAlwaysVisible={activeFullscreenTileId === 'local'}
+                                    portalTarget={fullscreenHostRef.current}
+                                    title={t('you')}
+                                    topLeftExtra={!isAudioEnabled ? <MicOff size={12} className="text-red-500" /> : null}
+                                    topRightControls={
+                                        <>
+                                            <button
+                                                onClick={() => setIsMirrored(!isMirrored)}
+                                                className="p-2 bg-black/40 hover:bg-black/60 backdrop-blur-md text-white rounded-lg border border-white/10"
+                                                title={t('toggle_mirror') || 'Toggle Mirror'}
+                                            >
+                                                <FlipHorizontal size={16} className={isMirrored ? "text-blue-400" : "text-white"} />
+                                            </button>
+                                            <button
+                                                onClick={() => toggleFullscreen('local')}
+                                                className="p-2 bg-black/40 hover:bg-black/60 backdrop-blur-md text-white rounded-lg border border-white/10"
+                                                title={activeFullscreenTileId === 'local' ? (t('restore_video') || 'Restore') : (t('fullscreen_video') || 'Fullscreen')}
+                                            >
+                                                {activeFullscreenTileId === 'local' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                                            </button>
+                                        </>
+                                    }
+                                >
+                                    <ZoomableVideoContainer>
+                                        <video
+                                            ref={el => {
+                                                localVideoRef.current = el;
+                                                if (el && localStreamRef.current) {
+                                                    if (el.srcObject !== localStreamRef.current) {
+                                                        el.srcObject = localStreamRef.current;
+                                                    }
+                                                }
+                                            }}
+                                            autoPlay
+                                            playsInline
+                                            muted
+                                            className={`w-full h-full object-contain ${isMirrored && !isSharing ? 'transform scale-x-[-1]' : ''} ${!isSharing && !isVideoEnabled ? 'hidden' : ''}`}
+                                        />
+                                    </ZoomableVideoContainer>
 
-                        {/* Remote Users */}
-                    {Object.entries(remoteStreams).map(([userId, stream]) => (
-                        <div key={userId} className="relative bg-gray-900 rounded-2xl overflow-hidden border border-gray-800 shadow-xl flex flex-col group aspect-video max-h-[calc(100vh-160px)]">
-                            <div className="absolute top-4 left-4 z-10 bg-black/40 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 flex items-center gap-2">
-                                <span className="text-xs font-medium text-white">{t('user_label', { userId: userId.slice(0, 4) })}</span>
-                                {/* Remote Role Badge */}
-                                {remoteRoles[userId] && (
-                                    <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold ${
-                                        remoteRoles[userId] === 'admin' ? 'bg-purple-500/80 text-white' :
-                                        remoteRoles[userId] === 'host' ? 'bg-orange-500/80 text-white' :
-                                        'bg-blue-500/50 text-white'
-                                    }`}>
-                                        {remoteRoles[userId] === 'admin' && <Shield size={8} />}
-                                        {remoteRoles[userId] === 'host' && <Crown size={8} />}
-                                        {remoteRoles[userId]}
-                                    </div>
-                                )}
-                            </div>
-                            
-                            {/* Admin Controls Overlay */}
-                            {hasPermission('canManageRoles') && (
-                                <div className="absolute top-4 right-4 z-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-                                    <button
-                                        onClick={() => handleUpdateRole(userId, remoteRoles[userId] || 'participant')}
-                                        className="p-2 bg-blue-600/80 hover:bg-blue-600 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105"
-                                        title={t('change_role_tooltip')}
-                                    >
-                                        <Shield size={14} />
-                                    </button>
-                                    {hasPermission('canKickUsers') && (
-                                        <button 
-                                            onClick={() => handleKickUser(userId)}
-                                            className="p-2 bg-red-600/80 hover:bg-red-600 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105"
-                                            title={t('kick_user_tooltip')}
-                                        >
-                                            <UserX size={14} />
-                                        </button>
+                                    {(!isSharing && (!localStreamRef.current || localStreamRef.current.getVideoTracks().length === 0 || !isVideoEnabled)) && (
+                                        <div className="flex flex-col items-center justify-center">
+                                            <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-blue-600 to-purple-600 flex items-center justify-center text-3xl font-bold text-white shadow-lg mb-4">
+                                                {t('me_placeholder')}
+                                            </div>
+                                            <p className="text-gray-500 text-sm">{t('camera_off')}</p>
+                                        </div>
                                     )}
-                                    {hasPermission('canMuteOthers') && (
-                                        <button 
-                                            onClick={() => handleMuteUser(userId, 'audio')}
-                                            className="p-2 bg-yellow-600/80 hover:bg-yellow-600 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105"
-                                            title={t('mute_user_tooltip')}
-                                        >
-                                            <VolumeX size={14} />
-                                        </button>
-                                    )}
-                                    {hasPermission('canManageRoles') && (
+                                </VideoTile>
+                            );
+                        }
+
+                        const userId = tileId;
+                        const stream = remoteStreams[userId];
+                        if (!stream) return null;
+                        const displayName = participantMeta[userId]?.name || t('user_label', { userId: userId.slice(0, 4) });
+
+                        return (
+                            <VideoTile
+                                key={userId}
+                                tileId={userId}
+                                mode={
+                                    activeFullscreenTileId === userId
+                                        ? (fullscreenTileId === userId ? 'fullscreen' : 'exiting')
+                                        : 'grid'
+                                }
+                                controlsAlwaysVisible={activeFullscreenTileId === userId}
+                                portalTarget={fullscreenHostRef.current}
+                                title={displayName}
+                                topLeftExtra={
+                                    remoteRoles[userId] ? (
+                                        <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold ${
+                                            remoteRoles[userId] === 'admin' ? 'bg-purple-500/80 text-white' :
+                                            remoteRoles[userId] === 'host' ? 'bg-orange-500/80 text-white' :
+                                            'bg-blue-500/50 text-white'
+                                        }`}>
+                                            {remoteRoles[userId] === 'admin' && <Shield size={8} />}
+                                            {remoteRoles[userId] === 'host' && <Crown size={8} />}
+                                            {remoteRoles[userId]}
+                                        </div>
+                                    ) : null
+                                }
+                                topRightControls={
+                                    <>
                                         <button
-                                            onClick={() => requestHighQuality(userId)}
-                                            className="p-2 bg-green-600/80 hover:bg-green-600 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105"
-                                            title={t('request_hq_tooltip')}
+                                            onClick={() => toggleFullscreen(userId)}
+                                            className="p-2 bg-black/40 hover:bg-black/60 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105 border border-white/10"
+                                            title={activeFullscreenTileId === userId ? (t('restore_video') || 'Restore') : (t('fullscreen_video') || 'Fullscreen')}
                                         >
-                                            <ArrowUpCircle size={14} />
+                                            {activeFullscreenTileId === userId ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
                                         </button>
-                                    )}
+                                        {hasPermission('canManageRoles') && (
+                                            <>
+                                                <button
+                                                    onClick={() => handleUpdateRole(userId, remoteRoles[userId] || 'participant')}
+                                                    className="p-2 bg-blue-600/80 hover:bg-blue-600 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105"
+                                                    title={t('change_role_tooltip')}
+                                                >
+                                                    <Shield size={14} />
+                                                </button>
+                                                {hasPermission('canKickUsers') && (
+                                                    <button 
+                                                        onClick={() => handleKickUser(userId)}
+                                                        className="p-2 bg-red-600/80 hover:bg-red-600 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105"
+                                                        title={t('kick_user_tooltip')}
+                                                    >
+                                                        <UserX size={14} />
+                                                    </button>
+                                                )}
+                                                {hasPermission('canMuteOthers') && (
+                                                    <button 
+                                                        onClick={() => handleMuteUser(userId, 'audio')}
+                                                        className="p-2 bg-yellow-600/80 hover:bg-yellow-600 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105"
+                                                        title={t('mute_user_tooltip')}
+                                                    >
+                                                        <VolumeX size={14} />
+                                                    </button>
+                                                )}
+                                                <button
+                                                    onClick={() => requestHighQuality(userId)}
+                                                    className="p-2 bg-green-600/80 hover:bg-green-600 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105"
+                                                    title={t('request_hq_tooltip')}
+                                                >
+                                                    <ArrowUpCircle size={14} />
+                                                </button>
+                                            </>
+                                        )}
+                                    </>
+                                }
+                            >
+                                <div className="flex-1 bg-gray-950 flex items-center justify-center overflow-hidden relative">
+                                    <ZoomableVideoContainer>
+                                        <VideoPlayer stream={stream} />
+                                    </ZoomableVideoContainer>
                                 </div>
-                            )}
-
-                            <div className="flex-1 bg-gray-950 flex items-center justify-center">
-                                <VideoPlayer stream={stream} />
-                            </div>
-                        </div>
-                    ))}
+                            </VideoTile>
+                        );
+                    })}
                     
                     {/* Waiting State */}
                     {Object.keys(remoteStreams).length === 0 && (
@@ -1957,7 +2245,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
             </div>
 
             {/* Bottom Control Bar */}
-            <div className="h-20 bg-gray-900 border-t border-gray-800 flex items-center justify-center px-4 pb-4">
+            <div className={`h-20 bg-gray-900 border-t border-gray-800 flex items-center justify-center px-4 pb-4 transition-opacity duration-200 ${activeFullscreenTileId ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
                 <div className="flex items-center gap-3 bg-gray-800/80 backdrop-blur-lg px-6 py-3 rounded-2xl border border-gray-700 shadow-2xl transform -translate-y-2">
                     
                     <button
@@ -2024,6 +2312,46 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                         <SignalLow size={20} />
                         <span className="text-[10px] font-medium whitespace-nowrap overflow-hidden text-ellipsis w-full text-center">{t('low_data_mode')}</span>
                     </button>
+
+                    <div ref={sortMenuRef} className="relative">
+                        <button
+                            onClick={() => setIsSortMenuOpen(prev => !prev)}
+                            className="p-3 rounded-xl transition-all duration-200 flex flex-col items-center gap-1 w-20 bg-gray-700/50 hover:bg-gray-600 text-white"
+                            title={t('sort_tooltip') || 'Sort'}
+                        >
+                            <ArrowUpDown size={20} />
+                            <span className="text-[10px] font-medium">{t('sort_btn') || 'Sort'}</span>
+                        </button>
+
+                        {isSortMenuOpen && (
+                            <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-56 bg-gray-900/95 border border-gray-700 rounded-xl shadow-2xl overflow-hidden z-50">
+                                <button
+                                    onClick={() => { applySortRule({ type: 'name', direction: 'asc' }); setIsSortMenuOpen(false); }}
+                                    className={`w-full text-left px-4 py-3 text-sm hover:bg-gray-800 transition-colors ${sortRule.type === 'name' && sortRule.direction === 'asc' ? 'text-blue-400' : 'text-gray-200'}`}
+                                >
+                                    {t('sort_name_asc') || 'Name (A → Z)'}
+                                </button>
+                                <button
+                                    onClick={() => { applySortRule({ type: 'name', direction: 'desc' }); setIsSortMenuOpen(false); }}
+                                    className={`w-full text-left px-4 py-3 text-sm hover:bg-gray-800 transition-colors ${sortRule.type === 'name' && sortRule.direction === 'desc' ? 'text-blue-400' : 'text-gray-200'}`}
+                                >
+                                    {t('sort_name_desc') || 'Name (Z → A)'}
+                                </button>
+                                <button
+                                    onClick={() => { applySortRule({ type: 'speaking', direction: 'desc' }); setIsSortMenuOpen(false); }}
+                                    className={`w-full text-left px-4 py-3 text-sm hover:bg-gray-800 transition-colors ${sortRule.type === 'speaking' ? 'text-blue-400' : 'text-gray-200'}`}
+                                >
+                                    {t('sort_speaking') || 'Speaking first'}
+                                </button>
+                                <button
+                                    onClick={() => { applySortRule({ type: 'joinedAt', direction: 'asc' }); setIsSortMenuOpen(false); }}
+                                    className={`w-full text-left px-4 py-3 text-sm hover:bg-gray-800 transition-colors ${sortRule.type === 'joinedAt' && sortRule.direction === 'asc' ? 'text-blue-400' : 'text-gray-200'}`}
+                                >
+                                    {t('sort_joined') || 'Join time'}
+                                </button>
+                            </div>
+                        )}
+                    </div>
 
                     <button
                         onClick={() => setIsChatOpen(!isChatOpen)}

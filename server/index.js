@@ -210,8 +210,28 @@ io.on('connection', (socket) => {
     // Store role
     roomRoles[roomId][userId] = assignedRole;
 
+    const joinedAt = Date.now();
+    socket.userData = { roomId, userId, username, joinedAt };
+
     socket.join(roomId);
-    socket.to(roomId).emit('user-connected', userId);
+
+    const roomSockets = io.sockets.adapter.rooms.get(roomId);
+    const users = [];
+    if (roomSockets) {
+      for (const socketId of roomSockets) {
+        const s = io.sockets.sockets.get(socketId);
+        if (s && s.userData && s.userData.roomId === roomId) {
+          users.push({
+            userId: s.userData.userId,
+            username: s.userData.username || 'Anonymous',
+            joinedAt: s.userData.joinedAt || Date.now(),
+          });
+        }
+      }
+    }
+
+    socket.emit('room-users', users);
+    socket.to(roomId).emit('user-connected', { userId, username: username || 'Anonymous', joinedAt });
     
     // Emit assigned role to the user
     socket.emit('role-assigned', assignedRole);
@@ -223,8 +243,6 @@ io.on('connection', (socket) => {
       isCreator: rooms[roomId].creator === userId
     });
 
-    // Store metadata on socket for disconnect handling
-    socket.userData = { roomId, userId, username };
   });
 
   // Role Management Signaling

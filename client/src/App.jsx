@@ -10,7 +10,10 @@ import WaveParticles from './components/WaveParticles';
 
 function App() {
   const { t, i18n } = useTranslation();
-  const [mode, setMode] = useState('home'); // 'home', 'webrtc', 'agora', 'jitsi'
+  const [mode, setMode] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('roomId') ? 'webrtc' : 'home';
+  }); // 'home', 'webrtc', 'agora', 'jitsi'
   const [toasts, setToasts] = useState([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 

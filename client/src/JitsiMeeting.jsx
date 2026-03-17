@@ -42,6 +42,7 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
             return;
         }
 
+        // Use meet.jit.si as the domain for better free tier support
         const domain = import.meta.env.VITE_JITSI_DOMAIN || 'meet.jit.si';
         const options = {
             roomName: room,
@@ -58,10 +59,8 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
                 hideConferenceTimer: false,
                 subject: ' ',
                 disableDeepLinking: true,
-                // Disable third-party requests to avoid 5-minute limit warning on some deployments
-                // Note: The 5-minute limit is a policy of meet.jit.si for anonymous users without auth.
-                // We cannot bypass it client-side if using their public server.
-                // We can only inform the user or use a self-hosted instance.
+                // Enable prejoin page to avoid immediate 5-min limit trigger on some networks
+                prejoinPageEnabled: true,
             },
             interfaceConfigOverwrite: {
                 TOOLBAR_BUTTONS: [
@@ -82,6 +81,9 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
                 // Hiding other elements
                 HIDE_DEEP_LINKING_LOGO: true,
                 MOBILE_APP_PROMO: false,
+                // Try to reduce "login required" prompts by disabling some features
+                ENABLE_DIAL_OUT: false,
+                ENABLE_REGISTER: false,
             },
             userInfo: {
                 displayName: displayName || t('guest_user')

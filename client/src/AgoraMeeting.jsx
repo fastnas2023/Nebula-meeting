@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import AgoraRTC from 'agora-rtc-sdk-ng';
 import { Cloud, Settings, LogOut, Video, Plus, Monitor, MonitorOff, PhoneOff, User, Check, AlertCircle, Wifi, Mic, Volume2 } from 'lucide-react';
 import { Loader } from './UI';
+import ZoomableVideoContainer from './components/ZoomableVideoContainer';
 
 const APP_ID_KEY = 'agora_appId';
 
@@ -16,7 +17,7 @@ const AgoraMeeting = ({ onBack, username, addToast }) => {
   const [channel, setChannel] = useState('');
   const [token, setToken] = useState('');
   
-  const [joined, setJoined] = useState(false);
+  const [_joined, setJoined] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
   const [remoteUsers, setRemoteUsers] = useState([]);
   const [networkQuality, setNetworkQuality] = useState(0); // 0: unknown, 1: excellent, 2: good, 3: poor, 4: bad, 5: very bad, 6: down
@@ -687,9 +688,11 @@ const AgoraMeeting = ({ onBack, username, addToast }) => {
                     {/* Video Grid */}
                     <div className="flex-1 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 overflow-y-auto pr-1">
                         {/* Self View */}
-                        <div className="bg-gray-900 rounded-2xl overflow-hidden aspect-video relative border border-gray-800 flex flex-col items-center justify-center shadow-xl">
+                        <div className="bg-gray-900 rounded-2xl overflow-hidden aspect-video relative border border-gray-800 flex flex-col items-center justify-center shadow-xl group">
                             {localCameraTrack ? (
-                                <AgoraVideoPlayer videoTrack={localCameraTrack} />
+                                <ZoomableVideoContainer>
+                                    <AgoraVideoPlayer videoTrack={localCameraTrack} />
+                                </ZoomableVideoContainer>
                             ) : (
                                 <>
                                     <div className="w-20 h-20 rounded-full bg-gray-800 flex items-center justify-center mb-4">
@@ -712,9 +715,11 @@ const AgoraMeeting = ({ onBack, username, addToast }) => {
 
                         {/* Remote Users */}
                         {remoteUsers.map(user => (
-                            <div key={user.uid} className="bg-black rounded-2xl overflow-hidden aspect-video relative border border-gray-800 shadow-xl">
-                                <AgoraVideoPlayer videoTrack={user.videoTrack} />
-                                <div className="absolute top-4 left-4 bg-black/40 backdrop-blur px-3 py-1 rounded-full text-xs font-medium text-white border border-white/10 flex items-center gap-2">
+                            <div key={user.uid} className="bg-black rounded-2xl overflow-hidden aspect-video relative border border-gray-800 shadow-xl group">
+                                <ZoomableVideoContainer>
+                                    <AgoraVideoPlayer videoTrack={user.videoTrack} />
+                                </ZoomableVideoContainer>
+                                <div className="absolute top-4 left-4 bg-black/40 backdrop-blur px-3 py-1 rounded-full text-xs font-medium text-white border border-white/10 flex items-center gap-2 pointer-events-none">
                                     <User size={12} />
                                     {t('user_label', { userId: user.uid })}
                                 </div>

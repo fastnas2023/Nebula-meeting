@@ -171,5 +171,17 @@
   "refresh_rooms": "刷新",
   "room_created_by": "创建者",
   "user_left_msg": "用户 {{userId}} 已离开会议",
-  "users_count": "人在线"
+  "users_count": "人在线",
+  "toggle_mirror": "镜像",
+  "fullscreen_video": "全屏",
+  "restore_video": "恢复",
+  "sort_tooltip": "排序",
+  "sort_btn": "排序",
+  "sort_name_asc": "按姓名升序",
+  "sort_name_desc": "按姓名降序",
+  "sort_speaking": "正在发言优先",
+  "sort_joined": "按入会时间",
+  "chat_title": "聊天",
+  "no_messages": "暂无消息",
+  "start_conversation": "开始聊天吧"
 }

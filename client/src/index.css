@@ -24,6 +24,31 @@ body {
   overflow-x: hidden; /* Prevent horizontal scroll */
 }
 
+.meeting-window {
+  will-change: transform, opacity;
+  transform: translateZ(0);
+  transition: transform 280ms ease, opacity 280ms ease;
+}
+
+.meeting-window--fullscreen {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  max-height: none;
+  border-radius: 18px;
+}
+
+.meeting-window--exiting {
+  opacity: 0;
+  transform: translateZ(0) scale(0.985);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meeting-window {
+    transition: none;
+  }
+}
+
 /* Custom Scrollbar for dark theme */
 ::-webkit-scrollbar {
   width: 8px;
