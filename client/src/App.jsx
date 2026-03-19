@@ -12,6 +12,7 @@ function App() {
   const { t, i18n } = useTranslation();
   const [mode, setMode] = useState(() => {
     const params = new URLSearchParams(window.location.search);
+    // 如果刷新后 URL 有 roomId，默认进入 webrtc
     return params.get('roomId') ? 'webrtc' : 'home';
   }); // 'home', 'webrtc', 'agora', 'jitsi'
   const [toasts, setToasts] = useState([]);

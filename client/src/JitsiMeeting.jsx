@@ -12,6 +12,12 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
   const [displayName, setDisplayName] = useState(username || localStorage.getItem('username') || '');
   const [meetingStarted, setMeetingStarted] = useState(false);
   const [copied, setCopied] = useState(false);
+  const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'meet.jit.si';
+  const [showLimitWarning, setShowLimitWarning] = useState(() => {
+    const dismissed = localStorage.getItem('jitsi.dismissLimitWarning') === '1';
+    const isPublic = jitsiDomain === 'meet.jit.si' || jitsiDomain.endsWith('.jit.si');
+    return isPublic && !dismissed;
+  });
   const apiRef = useRef(null);
 
   // Generate a random room name on mount
@@ -43,7 +49,6 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
         }
 
         // Use meet.jit.si as the domain for better free tier support
-        const domain = import.meta.env.VITE_JITSI_DOMAIN || 'meet.jit.si';
         const options = {
             roomName: room,
             width: '100%',
@@ -90,7 +95,7 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
             }
         };
 
-        apiRef.current = new window.JitsiMeetExternalAPI(domain, options);
+        apiRef.current = new window.JitsiMeetExternalAPI(jitsiDomain, options);
 
         apiRef.current.addEventListeners({
             readyToClose: () => {
@@ -112,6 +117,11 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
       }
       setMeetingStarted(false);
       onBack(); // Go back to home when meeting ends
+  };
+
+  const dismissLimitWarning = () => {
+    setShowLimitWarning(false);
+    localStorage.setItem('jitsi.dismissLimitWarning', '1');
   };
 
   return (
@@ -261,10 +271,19 @@ const JitsiMeeting = ({ onBack, username, addToast }) => {
             ) : (
                 <div className="w-full h-full relative bg-black flex flex-col">
                     {/* Warning Banner for Jitsi Free Tier */}
-                    <div className="bg-yellow-600/20 border-b border-yellow-600/30 px-4 py-2 flex items-center justify-center gap-2 text-yellow-500 text-xs font-medium z-[101]">
-                        <AlertTriangle size={14} />
-                        <span>{t('jitsi_free_limit_warning')}</span>
-                    </div>
+                    {showLimitWarning && (
+                        <div className="bg-yellow-600/20 border-b border-yellow-600/30 px-4 py-2 flex items-center justify-center gap-2 text-yellow-500 text-xs font-medium z-[101]">
+                            <AlertTriangle size={14} />
+                            <span>{t('jitsi_free_limit_warning')}</span>
+                            <button
+                                onClick={dismissLimitWarning}
+                                className="ml-2 text-yellow-500/80 hover:text-yellow-400 hover:bg-yellow-500/10 p-1 rounded transition-colors"
+                                title={t('close_dialog') || 'Close'}
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+                    )}
                      <button 
                         onClick={handleClose}
                         className="absolute top-14 left-4 z-[100] bg-gray-900/80 hover:bg-red-600 text-white p-2 rounded-full backdrop-blur-sm transition-all border border-gray-700 hover:border-red-500"

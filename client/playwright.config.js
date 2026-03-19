@@ -17,20 +17,33 @@ export default defineConfig({
     trace: 'on-first-retry',
     permissions: ['camera', 'microphone'],
     ignoreHTTPSErrors: true,
-    launchOptions: {
-      args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
-    },
   },
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        launchOptions: {
+          args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
+        },
+      },
+    },
+    {
+      name: 'firefox',
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
+      name: 'webkit',
+      use: { ...devices['Desktop Safari'] },
     },
   ],
   webServer: {
-    command: 'npm run dev',
+    command:
+      'bash -lc "SERVER_PORT=${SERVER_PORT:-5002}; ' +
+      'cd ../server && PORT=$SERVER_PORT node index.js & ' +
+      'cd ../client && VITE_SERVER_PORT=$SERVER_PORT npm run dev -- --host 0.0.0.0 --port 5173"',
     url: 'https://localhost:5173',
-    reuseExistingServer: true,
+    reuseExistingServer: !process.env.CI,
     ignoreHTTPSErrors: true,
   },
 });

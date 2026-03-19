@@ -5,7 +5,12 @@ import { Mic, MicOff, Monitor, MonitorOff, PhoneOff, Users, Copy, Check, AlertTr
 import { Loader } from './UI';
 import ZoomableVideoContainer from './components/ZoomableVideoContainer';
 import VideoTile from './components/VideoTile';
+import RejoinPrompt from './components/RejoinPrompt';
 import { loadFullscreenTileId, loadSortRule, saveFullscreenTileId, saveSortRule, sortParticipantIds } from './utils/meetingState';
+import { shouldCssFlipLocalPreview } from './utils/videoMirror';
+import { markShouldRejoin, clearRejoin, readRejoin } from './utils/session';
+import { getWithTtl, remove, setWithTtl } from './utils/ttlStorage';
+import { getOrCreateClientId } from './utils/clientId';
 
 // Use relative path for socket.io to leverage Vite proxy in dev and same-origin in prod
 const socket = io();
@@ -16,6 +21,9 @@ const stunServers = {
       urls: [
         'stun:stun.l.google.com:19302',
         'stun:stun1.l.google.com:19302',
+        'stun:stun.qq.com:3478',
+        'stun:stun.aliyun.com:3478',
+        'stun:stun.miwifi.com:3478',
       ],
     },
   ],
@@ -23,13 +31,30 @@ const stunServers = {
 
 function WebRTCMeeting({ onBack, addToast, username }) {
   const { t } = useTranslation();
+  const clientId = useMemo(() => getOrCreateClientId(localStorage), []);
   const [roomId, setRoomId] = useState('');
+  const [entryMode, setEntryMode] = useState('join');
+  const [joinRoomIdError, setJoinRoomIdError] = useState(false);
+  const [activeRoomQuery, setActiveRoomQuery] = useState('');
+  const generateNumericRoomId = () => {
+      try {
+          const arr = new Uint32Array(2);
+          window.crypto.getRandomValues(arr);
+          const n = ((arr[0] % 90000000) + 10000000).toString();
+          return n;
+      } catch (e) { void e; }
+      return Math.floor(10000000 + Math.random() * 90000000).toString();
+  };
+  const [createRoomId, setCreateRoomId] = useState(() => generateNumericRoomId());
+  const [createRoomName, setCreateRoomName] = useState('');
   const [_joined, setJoined] = useState(false);
   const [uiState, setUiState] = useState('welcome'); // 'welcome', 'setup', 'meeting'
   const [isSharing, setIsSharing] = useState(false);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
+  const [isRecordModeOpen, setIsRecordModeOpen] = useState(false);
+  const [recordingStats, setRecordingStats] = useState({ seconds: 0, bytes: 0 });
   const [remoteStreams, setRemoteStreams] = useState({});
   const [copied, setCopied] = useState(false);
   const [signalingState, setSignalingState] = useState('connected'); // connected, disconnected
@@ -50,6 +75,11 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const [resolution, setResolution] = useState('720p'); // 360p, 720p, 1080p
   const [frameRate, setFrameRate] = useState(30); // 15, 30, 60
   const [roomPassword, setRoomPassword] = useState(''); // New State for Password
+  const appliedRoomCredsRef = useRef(null);
+  const ROOM_CRED_TTL_MS = 2 * 60 * 60 * 1000;
+  const roomCredKey = (id) => `webrtc.roomCreds.${id}`;
+  const readRoomCreds = (id) => getWithTtl(sessionStorage, roomCredKey(id));
+  const writeRoomCreds = (id, data) => setWithTtl(sessionStorage, roomCredKey(id), data, ROOM_CRED_TTL_MS);
 
   // Role Management State
   const [myRole, setMyRole] = useState('participant');
@@ -59,6 +89,8 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const [isCreator, setIsCreator] = useState(false);
   const [activeRooms, setActiveRooms] = useState([]);
   const [isLoadingRooms, setIsLoadingRooms] = useState(false);
+  const [roomIdleTtlMs, setRoomIdleTtlMs] = useState(2 * 60 * 60 * 1000);
+  const [isLeaveOptionsOpen, setIsLeaveOptionsOpen] = useState(false);
 
   // Chat State
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -93,7 +125,19 @@ function WebRTCMeeting({ onBack, addToast, username }) {
       }
   }, [isChatOpen]);
 
+  useEffect(() => {
+    if (uiState !== 'setup') return;
+    if (!roomId) return;
+    if (appliedRoomCredsRef.current === roomId) return;
+    appliedRoomCredsRef.current = roomId;
+    const cached = readRoomCreds(roomId);
+    if (!cached) return;
+    if (typeof cached.nickname === 'string' && cached.nickname) setNickname(cached.nickname);
+    if (typeof cached.password === 'string' && cached.password && !roomPassword) setRoomPassword(cached.password);
+  }, [uiState, roomId]);
+
   const activeFullscreenTileId = fullscreenTileId || exitingFullscreenTileId;
+  
 
   const orderedTileIds = useMemo(() => {
       const localName = (nickname || '').trim() || (t('you') || 'You');
@@ -283,6 +327,33 @@ function WebRTCMeeting({ onBack, addToast, username }) {
     });
   }, [uiState, remoteStreams, isAudioEnabled]);
 
+  // 网络与可见性监听：不中断 UI，不跳回主页；恢复时尝试 ICE restart
+  useEffect(() => {
+    const onOnline = () => {
+      addToast(t('signal_ok'), 'info');
+      Object.entries(peersRef.current).forEach(([peerId, pc]) => {
+        if (pc.connectionState !== 'connected') {
+          pc.createOffer({ iceRestart: true })
+            .then(offer => pc.setLocalDescription(offer))
+            .then(() => socket.emit('offer', { target: peerId, sdp: pc.localDescription, sender: socket.id }))
+            .catch(() => {});
+        }
+      });
+    };
+    const onOffline = () => addToast(t('offline'), 'warning');
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') onOnline();
+    };
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [t]);
+
   useEffect(() => {
     if (uiState === 'meeting') return;
     const detectors = speakingDetectorRef.current;
@@ -298,41 +369,44 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   }, [uiState]);
 
   useEffect(() => {
-    // Check URL params for room ID
-    // ONLY do this if we are in 'welcome' state and haven't joined yet
-    if (uiState === 'welcome') {
-      const params = new URLSearchParams(window.location.search);
-      const urlRoomId = params.get('roomId');
-      
-      // Feature: Check if user is already in a room (from localStorage or similar state persistence if implemented)
-      // Since we don't have global state persistence across refreshes beyond URL, we rely on URL.
-      // But if we navigated back to 'welcome' without full reload, we might still have roomId state set but uiState='welcome'
-      // Let's simulate "Return to Room" logic.
-      
-      // If roomId is set (meaning we were in a room) and we are back at welcome (e.g. via Back button but component didn't unmount fully or we kept state)
-      // Actually, onBack() sets roomId to '' usually. 
-      // Let's assume we want to handle the case where user navigates away and back.
-      
-      if (urlRoomId && urlRoomId !== roomId) {
-          // Instead of auto-joining, let's show a confirmation if it looks like an active session
-          // For now, the requirement says "pop up confirmation".
-          // We can use a temporary state for this dialog.
-          setPendingRoomId(urlRoomId);
-          return; 
-      }
-      
-      fetchActiveRooms();
-      const interval = setInterval(fetchActiveRooms, 5000);
-      return () => clearInterval(interval);
+    // 启动阶段：支持刷新后自动回到会议
+    if (uiState !== 'welcome') return;
+
+    const params = new URLSearchParams(window.location.search);
+    const urlRoomId = params.get('roomId');
+    const { shouldRejoin, roomId: ssRoom, nickname: ssName } = readRejoin(sessionStorage);
+
+    if (urlRoomId) {
+      setPendingRoomId(urlRoomId);
+      return;
     }
+
+    if (shouldRejoin && ssRoom) {
+      const target = ssRoom;
+      if (ssName && !nickname) setNickname(ssName);
+      setRoomId(target || '');
+      (async () => {
+        try {
+          await confirmJoin();
+        } catch (e) { void e; }
+      })();
+      return;
+    }
+
+    // 正常欢迎页逻辑：拉活跃房间
+    fetchActiveRooms();
+    const interval = setInterval(fetchActiveRooms, 5000);
+    return () => clearInterval(interval);
   }, [uiState]);
 
   const [pendingRoomId, setPendingRoomId] = useState(null);
+  const autoJoinAfterConfirmRef = useRef(false);
 
   const confirmReturnRoom = () => {
       if (pendingRoomId) {
           // Analytics: Track "Return to Room" conversion
           console.log('[Analytics] User returned to room:', pendingRoomId);
+          autoJoinAfterConfirmRef.current = true;
           setRoomId(pendingRoomId);
           setUiState('setup');
           setPendingRoomId(null);
@@ -343,20 +417,37 @@ function WebRTCMeeting({ onBack, addToast, username }) {
       // Analytics: Track "Cancel Return"
       console.log('[Analytics] User cancelled return to room');
       setPendingRoomId(null);
+      try { clearRejoin(sessionStorage); } catch (e) { void e; }
       // Clear URL param
       const url = new URL(window.location);
       url.searchParams.delete('roomId');
-      window.history.pushState({}, '', url);
+      window.history.replaceState({}, '', url);
       // Refresh rooms list
       fetchActiveRooms();
   };
+
+  useEffect(() => {
+    if (uiState !== 'setup') return;
+    if (!autoJoinAfterConfirmRef.current) return;
+    autoJoinAfterConfirmRef.current = false;
+    (async () => {
+      try {
+        await confirmJoin();
+      } catch (e) { void e; }
+    })();
+  }, [uiState]);
 
   const fetchActiveRooms = () => {
     setIsLoadingRooms(true);
     fetch('/api/rooms')
       .then(res => res.json())
       .then(data => {
-        setActiveRooms(data);
+        if (Array.isArray(data)) {
+          setActiveRooms(data);
+        } else {
+          setActiveRooms(Array.isArray(data?.rooms) ? data.rooms : []);
+          if (typeof data?.roomIdleTtlMs === 'number') setRoomIdleTtlMs(data.roomIdleTtlMs);
+        }
         setIsLoadingRooms(false);
       })
       .catch(err => {
@@ -374,11 +465,29 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const screenStreamRef = useRef(null); // Separate video stream from screen share
   const mediaRecorderRef = useRef(null);
   const recordedChunksRef = useRef([]);
+  const recordingStopCleanupRef = useRef(null);
+  const recordingStatsIntervalRef = useRef(null);
   const volumeIntervalRef = useRef(null);
   const isJoiningRef = useRef(false);
   const speakingAudioContextRef = useRef(null);
   const speakingDetectorRef = useRef({});
   const speakingValueRef = useRef({});
+
+  // 依赖 refs 的镜像判定需放在 refs 初始化之后
+  const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const localVideoFacingMode = useMemo(() => {
+      const track = uiState === 'setup'
+          ? videoStreamRef.current?.getVideoTracks?.()[0]
+          : (isSharing ? screenStreamRef.current?.getVideoTracks?.()[0] : localStreamRef.current?.getVideoTracks?.()[0]);
+      const mode = track?.getSettings?.()?.facingMode;
+      return typeof mode === 'string' ? mode : undefined;
+  }, [uiState, selectedCameraId, isLowDataMode, resolution, frameRate, isSharing, isVideoEnabled]);
+  const shouldFlipLocalVideoCss = shouldCssFlipLocalPreview({
+      userAgent,
+      facingMode: localVideoFacingMode,
+      userMirrorEnabled: isMirrored,
+      isScreenShare: isSharing,
+  });
 
   useEffect(() => {
     if (uiState === 'meeting') {
@@ -450,7 +559,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
 
     socket.on('room-closed', () => {
       addToast(t('room_closed'), 'error');
-      onBack();
+      exitToHome();
     });
 
     socket.on('user-kicked', ({ targetUserId }) => {
@@ -460,7 +569,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
             localStreamRef.current.getTracks().forEach(track => track.stop());
         }
         addToast(t('you_were_kicked'), 'error');
-        onBack();
+        exitToHome();
       } else {
         addToast(t('user_kicked_msg'), 'info');
       }
@@ -917,14 +1026,27 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const joinRoom = (id) => {
     const targetId = typeof id === 'string' ? id : roomId;
     if (targetId) {
+      setJoinRoomIdError(false);
       if (typeof id === 'string') setRoomId(id);
       setUiState('setup');
     } else {
+        setJoinRoomIdError(true);
         addToast(t('enter_room_id_error'), "error");
     }
   };
 
   const confirmJoin = async () => {
+    try {
+      const nick = (nickname || '').trim();
+      const pwd = (roomPassword || '').trim();
+      if (roomId) {
+        if (nick || pwd) {
+          writeRoomCreds(roomId, { nickname: nick || null, password: pwd || null });
+        } else {
+          remove(sessionStorage, roomCredKey(roomId));
+        }
+      }
+    } catch (e) { void e; }
     // Manually stop preview tracks to prepare for meeting stream
     if (videoStreamRef.current) {
         videoStreamRef.current.getTracks().forEach(t => t.stop());
@@ -973,10 +1095,11 @@ function WebRTCMeeting({ onBack, addToast, username }) {
             audioStreamRef.current = new MediaStream([audioTrack]);
         }
         
-        // Update URL to persist room state on refresh
+        // Update URL + SessionStorage：支持刷新恢复
         const url = new URL(window.location);
         url.searchParams.set('roomId', roomId);
         window.history.pushState({}, '', url);
+        try { markShouldRejoin(sessionStorage, roomId, nickname || null); } catch (e) { void e; }
 
         // Now switch UI
         setUiState('meeting');
@@ -995,7 +1118,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
         if (nickname.trim()) {
             localStorage.setItem('username', nickname.trim());
         }
-        socket.emit('join-room', roomId, socket.id, nickname || 'Anonymous');
+        socket.emit('join-room', roomId, socket.id, nickname || 'Anonymous', (roomPassword || '').trim() || null, createRoomName.trim() || null, clientId);
 
     } catch (e) {
         console.error("Error getting user media on join:", e);
@@ -1003,6 +1126,26 @@ function WebRTCMeeting({ onBack, addToast, username }) {
         isJoiningRef.current = false;
         // Do not switch to meeting state if media fails
     }
+  };
+
+  const handleCreateMeeting = () => {
+      const id = createRoomId;
+      if (!id) return;
+      setRoomId(id);
+      setEntryMode('join');
+      setJoinRoomIdError(false);
+      setUiState('setup');
+  };
+
+  const regenerateCreateRoomId = () => {
+      setCreateRoomId(generateNumericRoomId());
+  };
+
+  const copyText = async (text) => {
+      try {
+          await navigator.clipboard.writeText(text);
+          addToast(t('copied') || 'Copied', 'success');
+      } catch (e) { void e; }
   };
 
   const toggleLowDataMode = async () => {
@@ -1170,25 +1313,34 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   };
 
   const handleCloseRoom = () => {
-    // If I am the creator, confirm if I want to close the room for everyone or just leave
     if (isCreator) {
-        if (window.confirm(t('confirm_close_room') || 'Close room for everyone?')) {
-            socket.emit('close-room');
-            onBack();
-        } else {
-             // Just leave? Maybe user clicked cancel but meant to leave.
-             // Or offer two buttons in a custom dialog.
-             // For now, let's assume if they cancel "Close Room", they might want to "Leave Room"
-             if (window.confirm(t('confirm_leave_room') || 'Just leave the room?')) {
-                 window.location.reload(); // Simple leave by refresh/redirect
-             }
-        }
+        setIsLeaveOptionsOpen(true);
     } else {
         if (window.confirm(t('confirm_leave_room') || 'Leave the room?')) {
-            onBack();
+            exitToHome();
         }
     }
   };
+
+  const leaveAndTransferHost = () => {
+      setIsLeaveOptionsOpen(false);
+      exitToHome();
+  };
+
+  const closeRoomForEveryone = () => {
+      setIsLeaveOptionsOpen(false);
+      socket.emit('close-room');
+      exitToHome();
+  };
+
+  useEffect(() => {
+      if (!isLeaveOptionsOpen) return;
+      const onKeyDown = (e) => {
+          if (e.key === 'Escape') setIsLeaveOptionsOpen(false);
+      };
+      window.addEventListener('keydown', onKeyDown);
+      return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isLeaveOptionsOpen]);
 
   const sendMessage = (e) => {
        e.preventDefault();
@@ -1474,17 +1626,21 @@ function WebRTCMeeting({ onBack, addToast, username }) {
     }
 
     try {
+          setIsRecordModeOpen(false);
           const stream = await navigator.mediaDevices.getDisplayMedia({
-              video: { mediaSource: "screen" },
-              audio: true
+              video: true,
+              audio: true,
           });
           
           const recorder = new MediaRecorder(stream);
           mediaRecorderRef.current = recorder;
+          recordedChunksRef.current = [];
+          setRecordingStats({ seconds: 0, bytes: 0 });
           
           recorder.ondataavailable = (event) => {
               if (event.data.size > 0) {
                   recordedChunksRef.current.push(event.data);
+                  setRecordingStats((prev) => ({ ...prev, bytes: prev.bytes + event.data.size }));
               }
           };
           
@@ -1500,12 +1656,26 @@ function WebRTCMeeting({ onBack, addToast, username }) {
               window.URL.revokeObjectURL(url);
               recordedChunksRef.current = [];
               setIsRecording(false);
+              setIsRecordModeOpen(false);
+              if (recordingStatsIntervalRef.current) {
+                  clearInterval(recordingStatsIntervalRef.current);
+                  recordingStatsIntervalRef.current = null;
+              }
+              if (recordingStopCleanupRef.current) {
+                  recordingStopCleanupRef.current();
+                  recordingStopCleanupRef.current = null;
+              }
               addToast(t('recording_saved'), "success");
           };
           
-          recorder.start();
+          recorder.start(1000);
           setIsRecording(true);
           addToast(t('recording_started'), "success");
+
+          if (recordingStatsIntervalRef.current) clearInterval(recordingStatsIntervalRef.current);
+          recordingStatsIntervalRef.current = setInterval(() => {
+              setRecordingStats((prev) => ({ ...prev, seconds: prev.seconds + 1 }));
+          }, 1000);
           
           // Stop recording if user stops sharing via browser UI
           stream.getVideoTracks()[0].onended = () => {
@@ -1521,152 +1691,543 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const stopRecording = () => {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
           mediaRecorderRef.current.stop();
-          mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
       }
+      try {
+          if (mediaRecorderRef.current?.stream) {
+              mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
+          }
+      } catch (e) { void e; }
+  };
+
+  const formatRecordingStats = (seconds, bytes) => {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      const mm = String(m).padStart(2, '0');
+      const ss = String(s).padStart(2, '0');
+      const mb = bytes / (1024 * 1024);
+      const size = mb >= 1 ? `${mb.toFixed(1)}MB` : `${Math.max(0, Math.round(bytes / 1024))}KB`;
+      return { time: `${mm}:${ss}`, size };
+  };
+
+  const pickSupportedMimeType = () => {
+      const candidates = [
+          'video/webm;codecs=vp9,opus',
+          'video/webm;codecs=vp8,opus',
+          'video/webm;codecs=vp9',
+          'video/webm;codecs=vp8',
+          'video/webm',
+      ];
+      for (const c of candidates) {
+          try {
+              if (MediaRecorder.isTypeSupported(c)) return c;
+          } catch (e) { void e; }
+      }
+      return '';
+  };
+
+  const startCompositeRecording = async () => {
+      if (!hasPermission('canRecord')) {
+          addToast(t('permission_denied_record'), 'error');
+          return;
+      }
+
+      setIsRecordModeOpen(false);
+      const tiles = activeFullscreenTileId ? [activeFullscreenTileId] : orderedTileIds;
+      const streamById = (id) => {
+          if (id === 'local') return localStreamRef.current;
+          return remoteStreams[id];
+      };
+
+      const videos = new Map();
+      const cleanupVideos = () => {
+          for (const v of videos.values()) {
+              try {
+                  v.pause();
+              } catch (e) { void e; }
+              try {
+                  v.srcObject = null;
+              } catch (e) { void e; }
+              try {
+                  v.remove();
+              } catch (e) { void e; }
+          }
+          videos.clear();
+      };
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 1280;
+      canvas.height = 720;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+          addToast(t('recording_error'), 'error');
+          return;
+      }
+
+      const ensureVideo = async (id, stream) => {
+          if (!stream) return null;
+          if (videos.has(id)) return videos.get(id);
+          const v = document.createElement('video');
+          v.muted = true;
+          v.playsInline = true;
+          v.autoplay = true;
+          v.style.position = 'fixed';
+          v.style.left = '-99999px';
+          v.style.top = '0';
+          v.style.width = '1px';
+          v.style.height = '1px';
+          v.srcObject = stream;
+          document.body.appendChild(v);
+          await new Promise((resolve) => {
+              const done = () => resolve();
+              if (v.readyState >= 2) return done();
+              v.onloadedmetadata = done;
+              v.oncanplay = done;
+          });
+          try {
+              await v.play();
+          } catch (e) { void e; }
+          videos.set(id, v);
+          return v;
+      };
+
+      for (const id of tiles) {
+          const s = streamById(id);
+          await ensureVideo(id, s);
+      }
+
+      const capture = canvas.captureStream(30);
+
+      let audioContext = null;
+      let audioDest = null;
+      try {
+          const Ctor = window.AudioContext || window.webkitAudioContext;
+          if (Ctor) {
+              audioContext = new Ctor();
+              audioDest = audioContext.createMediaStreamDestination();
+              const sources = [];
+              tiles.forEach((id) => {
+                  const s = streamById(id);
+                  if (!s) return;
+                  if (s.getAudioTracks().length === 0) return;
+                  try {
+                      const src = audioContext.createMediaStreamSource(s);
+                      src.connect(audioDest);
+                      sources.push(src);
+                  } catch (e) { void e; }
+              });
+              audioDest.stream.getAudioTracks().forEach((t) => capture.addTrack(t));
+          }
+      } catch (e) { void e; }
+
+      const mimeType = pickSupportedMimeType();
+      const recorder = mimeType ? new MediaRecorder(capture, { mimeType }) : new MediaRecorder(capture);
+      mediaRecorderRef.current = recorder;
+      recordedChunksRef.current = [];
+      setRecordingStats({ seconds: 0, bytes: 0 });
+
+      const drawContain = (video, x, y, w, h) => {
+          const vw = video.videoWidth || 1;
+          const vh = video.videoHeight || 1;
+          const scale = Math.min(w / vw, h / vh);
+          const dw = vw * scale;
+          const dh = vh * scale;
+          const dx = x + (w - dw) / 2;
+          const dy = y + (h - dh) / 2;
+          ctx.drawImage(video, dx, dy, dw, dh);
+      };
+
+      let raf = 0;
+      const render = () => {
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          const n = tiles.length;
+          const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 4 ? 2 : n <= 6 ? 3 : 3;
+          const rows = Math.ceil(n / cols);
+          const pad = 8;
+          const cellW = (canvas.width - pad * (cols + 1)) / cols;
+          const cellH = (canvas.height - pad * (rows + 1)) / rows;
+
+          tiles.forEach((id, idx) => {
+              const col = idx % cols;
+              const row = Math.floor(idx / cols);
+              const x = pad + col * (cellW + pad);
+              const y = pad + row * (cellH + pad);
+              const v = videos.get(id);
+              if (v && v.readyState >= 2) {
+                  drawContain(v, x, y, cellW, cellH);
+              }
+          });
+
+          raf = requestAnimationFrame(render);
+      };
+      render();
+
+      recordingStopCleanupRef.current = () => {
+          try {
+              cancelAnimationFrame(raf);
+          } catch (e) { void e; }
+          try {
+              capture.getTracks().forEach(t => t.stop());
+          } catch (e) { void e; }
+          try {
+              if (audioContext) audioContext.close();
+          } catch (e) { void e; }
+          cleanupVideos();
+          try {
+              canvas.remove();
+          } catch (e) { void e; }
+      };
+
+      recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+              recordedChunksRef.current.push(event.data);
+              setRecordingStats((prev) => ({ ...prev, bytes: prev.bytes + event.data.size }));
+          }
+      };
+
+      recorder.onstop = () => {
+          const blob = new Blob(recordedChunksRef.current, { type: recorder.mimeType || 'video/webm' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          document.body.appendChild(a);
+          a.style = 'display: none';
+          a.href = url;
+          a.download = `meeting-composite-${Date.now()}.webm`;
+          a.click();
+          window.URL.revokeObjectURL(url);
+          recordedChunksRef.current = [];
+          setIsRecording(false);
+          setIsRecordModeOpen(false);
+          if (recordingStatsIntervalRef.current) {
+              clearInterval(recordingStatsIntervalRef.current);
+              recordingStatsIntervalRef.current = null;
+          }
+          if (recordingStopCleanupRef.current) {
+              recordingStopCleanupRef.current();
+              recordingStopCleanupRef.current = null;
+          }
+          addToast(t('recording_saved'), 'success');
+      };
+
+      recorder.start(1000);
+      setIsRecording(true);
+      addToast(t('recording_started'), 'success');
+
+      if (recordingStatsIntervalRef.current) clearInterval(recordingStatsIntervalRef.current);
+      recordingStatsIntervalRef.current = setInterval(() => {
+          setRecordingStats((prev) => ({ ...prev, seconds: prev.seconds + 1 }));
+      }, 1000);
+  };
+
+  const openRecordingMode = () => setIsRecordModeOpen(true);
+
+  const exitToHome = () => {
+      try { clearRejoin(sessionStorage); } catch (e) { void e; }
+      onBack();
   };
 
   if (uiState === 'welcome') {
+      const normalizedQuery = (activeRoomQuery || '').trim().toLowerCase();
+      const visibleRooms = normalizedQuery
+        ? activeRooms.filter((r) => {
+            const id = String(r?.roomId || '').toLowerCase();
+            const creator = String(r?.creatorName || '').toLowerCase();
+            return id.includes(normalizedQuery) || creator.includes(normalizedQuery);
+          })
+        : activeRooms;
+
       return (
-        <div className="h-screen bg-gray-950 flex items-center justify-center p-4 relative">
-          {/* Return Room Modal */}
+        <div className="min-h-screen bg-black text-white flex items-center justify-center p-4 relative overflow-hidden">
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-blue-900/20 via-black to-black"></div>
+          <div className="absolute top-[15%] left-[15%] w-[40%] h-[40%] bg-blue-600/10 rounded-full blur-[120px]"></div>
+          <div className="absolute bottom-[10%] right-[15%] w-[40%] h-[40%] bg-purple-600/10 rounded-full blur-[120px]"></div>
+
           {pendingRoomId && (
-              <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                  <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 max-w-md w-full shadow-2xl animate-in zoom-in-95 duration-200">
-                      <div className="flex items-center gap-3 mb-4 text-blue-400">
-                          <ArrowUpCircle size={24} />
-                          <h3 className="text-xl font-bold text-white">{t('return_room_title')}</h3>
-                      </div>
-                      <p className="text-gray-300 mb-6 leading-relaxed">
-                          {t('return_room_desc', { roomId: pendingRoomId })}
-                      </p>
-                      <div className="flex justify-end gap-3">
-                              <button 
-                                  onClick={cancelReturnRoom}
-                                  className="px-4 py-2 rounded-xl text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
-                              >
-                                  {t('ignore_btn')}
-                              </button>
-                              <button 
-                                  onClick={confirmReturnRoom}
-                              className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium shadow-lg shadow-blue-900/20 transition-all flex items-center gap-2"
-                          >
-                              {t('return_btn')}
-                              <ArrowRight size={16} />
-                          </button>
-                      </div>
-                  </div>
-              </div>
+            <RejoinPrompt t={t} onConfirm={confirmReturnRoom} onCancel={cancelReturnRoom} />
           )}
 
-          <div className="flex flex-col md:flex-row gap-8 w-full max-w-5xl">
-            {/* Join/Create Section */}
-            <div className="bg-gray-900 p-8 rounded-2xl shadow-2xl w-full md:w-1/3 border border-gray-800 flex flex-col">
-              <div className="flex justify-center mb-8">
-                <div className="w-20 h-20 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-900/20">
-                  <Users size={40} className="text-white" />
-                </div>
-              </div>
-              <h2 className="text-3xl font-bold text-center mb-2 text-white">{t('join_meeting_title')}</h2>
-              <p className="text-center text-gray-400 mb-8">{t('join_meeting_desc')}</p>
-              
-              <div className="space-y-4 flex-grow">
-                <div>
-                  <input
-                    type="text"
-                    placeholder={t('room_id_placeholder')}
-                    value={roomId}
-                    onChange={(e) => setRoomId(e.target.value)}
-                    className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                    onKeyDown={(e) => e.key === 'Enter' && joinRoom()}
-                  />
+          <div className="relative w-full max-w-6xl grid grid-cols-1 lg:grid-cols-5 gap-6">
+            <div className="lg:col-span-2 bg-gray-900/40 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl shadow-black/40 overflow-hidden">
+              <div className="p-6 border-b border-white/10 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 bg-blue-600/90 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                    <Users size={22} />
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold">{t('webrtc_entry_title') || t('webrtc_card_title') || 'WebRTC Meeting'}</div>
+                    <div className="text-xs text-gray-400">{t('webrtc_entry_subtitle') || t('webrtc_card_desc') || 'Unlimited self-hosted meeting'}</div>
+                  </div>
                 </div>
                 <button
-                  onClick={joinRoom}
-                  className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-medium transition-all transform active:scale-95 shadow-lg shadow-blue-900/30 flex items-center justify-center gap-2"
-                >
-                  {t('continue_btn')} <Users size={18} />
-                </button>
-                <button
-                  onClick={onBack}
-                  className="w-full py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl font-medium transition-colors"
+                  onClick={exitToHome}
+                  className="px-3 py-2 text-xs font-medium text-gray-300 hover:text-white hover:bg-white/10 rounded-xl transition-colors"
                 >
                   {t('back_home_btn')}
                 </button>
               </div>
-            </div>
 
-            {/* Active Rooms List */}
-            <div className="bg-gray-900 p-8 rounded-2xl shadow-2xl w-full md:w-2/3 border border-gray-800 flex flex-col">
-                <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                        <Monitor size={20} className="text-green-500" />
-                        {t('active_rooms_title')}
-                    </h3>
-                    <button 
+              <div className="p-6">
+                <div className="inline-flex bg-black/30 border border-white/10 rounded-2xl p-1 mb-6 w-full">
+                  <button
+                    onClick={() => setEntryMode('join')}
+                    className={`flex-1 px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${entryMode === 'join' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}
+                  >
+                    {t('entry_join_tab') || t('join_meeting_title') || 'Join'}
+                  </button>
+                  <button
+                    onClick={() => setEntryMode('create')}
+                    className={`flex-1 px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${entryMode === 'create' ? 'bg-white text-black' : 'text-gray-300 hover:text-white'}`}
+                  >
+                    {t('entry_create_tab') || t('create_meeting_btn') || 'Create'}
+                  </button>
+                </div>
+
+                {entryMode === 'join' ? (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-400 mb-2">{t('room_id_label') || 'Room ID'}</label>
+                      <input
+                        type="text"
+                        placeholder={t('room_id_placeholder')}
+                        value={roomId}
+                        onChange={(e) => {
+                          setRoomId(e.target.value);
+                          setJoinRoomIdError(false);
+                        }}
+                        className={`w-full px-4 py-3 rounded-2xl text-white placeholder-gray-500 outline-none transition-all bg-black/30 border ${
+                          joinRoomIdError ? 'border-red-500/60 focus:ring-2 focus:ring-red-500/30' : 'border-white/10 focus:ring-2 focus:ring-blue-500/30'
+                        }`}
+                        onKeyDown={(e) => e.key === 'Enter' && joinRoom()}
+                        autoFocus
+                      />
+                      {joinRoomIdError && (
+                        <div className="mt-2 text-xs text-red-400">{t('enter_room_id_error')}</div>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={joinRoom}
+                      className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold transition-all transform active:scale-[0.98] shadow-lg shadow-blue-900/30 flex items-center justify-center gap-2"
+                    >
+                      {t('continue_btn')} <ArrowRight size={18} />
+                    </button>
+
+                    <div className="flex items-center justify-between pt-2">
+                      <button
+                        onClick={() => {
+                          setEntryMode('create');
+                          if (!createRoomId) regenerateCreateRoomId();
+                        }}
+                        className="text-sm font-medium text-gray-300 hover:text-white transition-colors"
+                      >
+                        {t('quick_create_hint') || 'No room yet? Create one'}
+                      </button>
+                      <button
                         onClick={fetchActiveRooms}
                         disabled={isLoadingRooms}
-                        className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white transition-colors disabled:opacity-50"
-                        title={t('refresh_rooms')}
-                    >
-                        <RefreshCw size={18} className={isLoadingRooms ? "animate-spin" : ""} />
-                    </button>
-                </div>
+                        className="text-sm font-medium text-gray-300 hover:text-white transition-colors disabled:opacity-50"
+                      >
+                        {t('refresh_rooms') || 'Refresh'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-400 mb-2">{t('create_room_label') || 'New Room ID'}</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={createRoomId}
+                          onChange={(e) => setCreateRoomId(e.target.value)}
+                          className="flex-1 px-4 py-3 rounded-2xl text-white outline-none bg-black/30 border border-white/10 focus:ring-2 focus:ring-purple-500/30 font-mono"
+                        />
+                        <button
+                          onClick={regenerateCreateRoomId}
+                          className="p-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 hover:text-white transition-colors"
+                          title={t('regenerate_btn') || 'Regenerate'}
+                        >
+                          <RefreshCw size={18} />
+                        </button>
+                      </div>
+                      <div className="mt-4">
+                        <label className="block text-xs font-medium text-gray-400 mb-2">{t('create_room_name_label') || 'Room Name'}</label>
+                        <input
+                          type="text"
+                          value={createRoomName}
+                          onChange={(e) => setCreateRoomName(e.target.value)}
+                          placeholder={t('create_room_name_placeholder') || 'e.g. Weekly Sync'}
+                          className="w-full px-4 py-3 rounded-2xl text-white outline-none bg-black/30 border border-white/10 focus:ring-2 focus:ring-purple-500/30"
+                          maxLength={60}
+                        />
+                      </div>
+                      <div className="mt-2 flex items-center justify-between text-xs text-gray-400">
+                        <span>{t('create_room_desc') || 'You can edit it before creating.'}</span>
+                        <button onClick={() => copyText(createRoomId)} className="text-gray-300 hover:text-white transition-colors">
+                          {t('copy_room_id') || 'Copy'}
+                        </button>
+                      </div>
+                    </div>
 
-                <div className="flex-grow overflow-y-auto pr-2 custom-scrollbar space-y-3 max-h-[500px]">
-                    {isLoadingRooms && activeRooms.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-40 text-gray-500">
-                            <Loader2 size={30} className="animate-spin mb-2" />
-                            <p>{t('loading')}...</p>
-                        </div>
-                    ) : activeRooms.length > 0 ? (
-                        activeRooms.map((room) => (
-                            <div key={room.roomId} className="bg-gray-800/50 border border-gray-700/50 rounded-xl p-4 hover:border-blue-500/50 hover:bg-gray-800 transition-all group">
-                                <div className="flex justify-between items-start">
-                                    <div>
-                                        <div className="flex items-center gap-2 mb-1">
-                                            <span className="font-mono text-lg font-bold text-blue-400">{room.roomId}</span>
-                                            {room.isProtected && (
-                                                <Lock size={14} className="text-yellow-500" title={t('password_protected') || "Password Protected"} />
-                                            )}
-                                            {room.creatorName && (
-                                                <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20">
-                                                    <Crown size={10} />
-                                                    {room.creatorName}
-                                                </span>
-                                            )}
-                                        </div>
-                                        <div className="flex items-center gap-4 text-sm text-gray-400">
-                                            <div className="flex items-center gap-1.5">
-                                                <Clock size={14} />
-                                                <span>{new Date(room.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                            </div>
-                                            <div className="flex items-center gap-1.5">
-                                                <Users size={14} />
-                                                <span>{room.userCount} {t('users_count')}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <button
-                                        onClick={() => {
-                                            setRoomId(room.roomId);
-                                            setUiState('setup');
-                                            // Reset password state when selecting a new room
-                                            setRoomPassword('');
-                                        }}
-                                        className="px-4 py-2 bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white rounded-lg text-sm font-medium transition-all opacity-0 group-hover:opacity-100 transform translate-x-2 group-hover:translate-x-0"
-                                    >
-                                        {t('join_now_btn')}
-                                    </button>
-                                </div>
-                            </div>
-                        ))
-                    ) : (
-                        <div className="flex flex-col items-center justify-center h-40 text-gray-500 border-2 border-dashed border-gray-800 rounded-xl">
-                            <MonitorOff size={30} className="mb-2 opacity-50" />
-                            <p>{t('no_active_rooms')}</p>
-                        </div>
-                    )}
+                    <button
+                      onClick={handleCreateMeeting}
+                      className="w-full py-3 bg-white text-black rounded-2xl font-bold transition-all transform active:scale-[0.98] shadow-lg shadow-white/10 flex items-center justify-center gap-2"
+                    >
+                      {t('create_meeting_primary') || 'Create & Continue'} <ArrowRight size={18} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="lg:col-span-3 bg-gray-900/40 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl shadow-black/40 overflow-hidden flex flex-col min-h-[420px]">
+              <div className="p-6 border-b border-white/10 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-2">
+                  <Monitor size={18} className="text-green-500" />
+                  <div className="font-bold">{t('active_rooms_title')}</div>
+                  <div className="text-xs text-gray-400">{visibleRooms.length}/{activeRooms.length}</div>
+                  <div className="text-xs text-gray-500 hidden sm:block">
+                    {t('room_cleanup_rule', { minutes: Math.round(roomIdleTtlMs / 60000) }) ||
+                      `空房间超过 ${Math.round(roomIdleTtlMs / 60000)} 分钟自动清理`}
+                  </div>
                 </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() =>
+                      copyText(
+                        JSON.stringify({
+                          at: new Date().toISOString(),
+                          ua: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+                          rooms: activeRooms.length,
+                        })
+                      )
+                    }
+                    className="p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-gray-300 hover:text-white transition-colors"
+                    title={t('feedback_btn') || 'Feedback'}
+                  >
+                    <MessageSquare size={18} />
+                  </button>
+                  <button
+                    onClick={fetchActiveRooms}
+                    disabled={isLoadingRooms}
+                    className="p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-gray-300 hover:text-white transition-colors disabled:opacity-50"
+                    title={t('refresh_rooms')}
+                  >
+                    <RefreshCw size={18} className={isLoadingRooms ? 'animate-spin' : ''} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-6 pt-4">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={activeRoomQuery}
+                    onChange={(e) => setActiveRoomQuery(e.target.value)}
+                    placeholder={t('search_rooms_placeholder') || 'Search by room or creator'}
+                    className="flex-1 px-4 py-2.5 rounded-2xl text-sm text-white placeholder-gray-500 outline-none bg-black/30 border border-white/10 focus:ring-2 focus:ring-blue-500/30"
+                  />
+                  {activeRoomQuery ? (
+                    <button
+                      onClick={() => setActiveRoomQuery('')}
+                      className="p-2.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 hover:text-white transition-colors"
+                      title={t('clear_btn') || 'Clear'}
+                    >
+                      <X size={16} />
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="px-6 pb-6 flex-1 overflow-y-auto custom-scrollbar space-y-3">
+                {isLoadingRooms && activeRooms.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-48 text-gray-500">
+                    <Loader2 size={30} className="animate-spin mb-3" />
+                    <p className="text-sm">{t('loading')}...</p>
+                  </div>
+                ) : visibleRooms.length > 0 ? (
+                  visibleRooms.map((room) => (
+                    <div
+                      key={room.roomId}
+                      className="bg-black/25 border border-white/10 rounded-2xl p-4 hover:bg-black/35 hover:border-blue-500/30 transition-all"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <span className="font-mono text-base font-bold text-blue-300 break-all">{room.roomId}</span>
+                            {room.roomName ? (
+                              <span className="text-sm font-semibold text-white/90 truncate max-w-[320px]">{room.roomName}</span>
+                            ) : null}
+                            {room.isProtected && (
+                              <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-300 border border-yellow-500/20">
+                                <Lock size={12} />
+                                {t('password_required') || 'Protected'}
+                              </span>
+                            )}
+                            {room.creatorName && (
+                              <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20">
+                                <Crown size={10} />
+                                {room.creatorName}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-4 text-xs text-gray-400">
+                            <div className="flex items-center gap-1.5">
+                              <Clock size={12} />
+                              <span>{new Date(room.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <Users size={12} />
+                              <span>
+                                {room.userCount} {t('users_count')}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => copyText(room.roomId)}
+                            className="p-2.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 hover:text-white transition-colors"
+                            title={t('copy_room_id') || 'Copy'}
+                          >
+                            <Copy size={16} />
+                          </button>
+                          <button
+                            onClick={() => {
+                              const nextRoomId = room.roomId;
+                              setRoomId(nextRoomId);
+                              setJoinRoomIdError(false);
+                              setEntryMode('join');
+                              setUiState('setup');
+                              const cached = readRoomCreds(nextRoomId);
+                              setRoomPassword(typeof cached?.password === 'string' ? cached.password : '');
+                            }}
+                            className="px-4 py-2.5 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold transition-all shadow-lg shadow-blue-900/20"
+                          >
+                            {t('join_now_btn')}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-48 text-gray-500 border-2 border-dashed border-white/10 rounded-2xl">
+                    <MonitorOff size={30} className="mb-3 opacity-60" />
+                    <p className="text-sm">{t('no_active_rooms')}</p>
+                    <button
+                      onClick={() => {
+                        setEntryMode('create');
+                        regenerateCreateRoomId();
+                      }}
+                      className="mt-4 px-4 py-2 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 hover:text-white transition-colors text-sm"
+                    >
+                      {t('create_meeting_btn') || 'Create a meeting'}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -1686,7 +2247,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                               autoPlay
                               muted
                               playsInline
-                              className={`w-full h-full object-cover ${!isVideoEnabled ? 'hidden' : ''}`} 
+                              className={`w-full h-full object-cover ${!isVideoEnabled ? 'hidden' : ''} ${shouldFlipLocalVideoCss ? 'transform scale-x-[-1]' : ''}`} 
                           />
                           {!isVideoEnabled && (
                               <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
@@ -2128,7 +2689,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                                             autoPlay
                                             playsInline
                                             muted
-                                            className={`w-full h-full object-contain ${isMirrored && !isSharing ? 'transform scale-x-[-1]' : ''} ${!isSharing && !isVideoEnabled ? 'hidden' : ''}`}
+                                            className={`w-full h-full object-contain ${shouldFlipLocalVideoCss ? 'transform scale-x-[-1]' : ''} ${!isSharing && !isVideoEnabled ? 'hidden' : ''}`}
                                         />
                                     </ZoomableVideoContainer>
 
@@ -2288,7 +2849,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                     </button>
 
                     <button
-                        onClick={isRecording ? stopRecording : startRecording}
+                        onClick={isRecording ? stopRecording : openRecordingMode}
                         className={`p-3 rounded-xl transition-all duration-200 flex flex-col items-center gap-1 w-20 ${
                             isRecording 
                             ? 'bg-red-500/10 hover:bg-red-500/20 text-red-500 animate-pulse' 
@@ -2297,7 +2858,19 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                         title={isRecording ? t('stop_recording_tooltip') : t('start_recording_tooltip')}
                     >
                         {isRecording ? <StopCircle size={20} /> : <div className="w-5 h-5 rounded-full border-2 border-current flex items-center justify-center"><div className="w-2 h-2 bg-current rounded-full"></div></div>}
-                        <span className="text-[10px] font-medium">{isRecording ? t('rec_btn') : t('record_btn')}</span>
+                        {isRecording ? (
+                            (() => {
+                                const s = formatRecordingStats(recordingStats.seconds, recordingStats.bytes);
+                                return (
+                                    <span className="text-[10px] font-medium leading-tight text-center">
+                                        {t('rec_btn')} {s.time}
+                                        <span className="block opacity-80">{s.size}</span>
+                                    </span>
+                                );
+                            })()
+                        ) : (
+                            <span className="text-[10px] font-medium">{t('record_btn')}</span>
+                        )}
                     </button>
 
                     <button
@@ -2374,7 +2947,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                     <div className="w-px h-8 bg-gray-700 mx-2"></div>
 
                     <button
-                        onClick={onBack}
+                        onClick={exitToHome}
                         className="p-3 rounded-xl bg-red-600 hover:bg-red-700 text-white transition-all duration-200 flex flex-col items-center gap-1 w-20 shadow-lg shadow-red-900/20"
                         title={t('leave_meeting_tooltip')}
                     >
@@ -2441,6 +3014,106 @@ function WebRTCMeeting({ onBack, addToast, username }) {
                                 >
                                     <Check size={18} />
                                     {t('start_sharing_btn')}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isRecordModeOpen && !isRecording && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                    <div className="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+                        <div className="p-4 border-b border-gray-800 flex items-center justify-between bg-gray-900/50">
+                            <div className="flex items-center gap-2">
+                                <div className="p-2 bg-red-500/10 rounded-lg border border-red-500/20">
+                                    <div className="w-5 h-5 rounded-full border-2 border-red-400 flex items-center justify-center">
+                                        <div className="w-2 h-2 bg-red-400 rounded-full"></div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <h3 className="text-lg font-semibold text-white leading-tight">{t('recording_mode_title')}</h3>
+                                    <p className="text-xs text-gray-400">{t('recording_mode_desc')}</p>
+                                </div>
+                            </div>
+                            <button onClick={() => setIsRecordModeOpen(false)} className="text-gray-400 hover:text-white transition-colors p-2 hover:bg-gray-800 rounded-lg">
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div className="p-6 space-y-4">
+                            <button
+                                onClick={startRecording}
+                                className="w-full text-left p-5 rounded-2xl border border-gray-700 hover:border-red-500/40 bg-gray-950/30 hover:bg-gray-800/40 transition-all"
+                            >
+                                <div className="flex items-center justify-between gap-4">
+                                    <div>
+                                        <div className="text-white font-semibold">{t('recording_mode_screen')}</div>
+                                        <div className="text-sm text-gray-400 mt-1">{t('recording_mode_screen_desc')}</div>
+                                    </div>
+                                    <ArrowRight size={18} className="text-gray-400" />
+                                </div>
+                            </button>
+
+                            <button
+                                onClick={startCompositeRecording}
+                                className="w-full text-left p-5 rounded-2xl border border-gray-700 hover:border-blue-500/40 bg-gray-950/30 hover:bg-gray-800/40 transition-all"
+                            >
+                                <div className="flex items-center justify-between gap-4">
+                                    <div>
+                                        <div className="text-white font-semibold">{t('recording_mode_composite')}</div>
+                                        <div className="text-sm text-gray-400 mt-1">{t('recording_mode_composite_desc')}</div>
+                                    </div>
+                                    <ArrowRight size={18} className="text-gray-400" />
+                                </div>
+                            </button>
+
+                            <div className="pt-2 flex justify-end">
+                                <button
+                                    onClick={() => setIsRecordModeOpen(false)}
+                                    className="px-5 py-2 rounded-xl font-medium text-gray-400 hover:text-white hover:bg-gray-800 transition-all border border-transparent hover:border-gray-700"
+                                >
+                                    {t('cancel_btn')}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isLeaveOptionsOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200" onClick={() => setIsLeaveOptionsOpen(false)}>
+                    <div className="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+                        <div className="p-4 border-b border-gray-800 flex items-center justify-between bg-gray-900/50">
+                            <div>
+                                <h3 className="text-lg font-semibold text-white leading-tight">{t('leave_options_title') || t('confirm_leave_room') || 'Leave room'}</h3>
+                                <p className="text-xs text-gray-400 mt-1">{t('leave_options_desc') || 'You can leave without closing the room. Host will be transferred.'}</p>
+                            </div>
+                            <button onClick={() => setIsLeaveOptionsOpen(false)} className="text-gray-400 hover:text-white transition-colors p-2 hover:bg-gray-800 rounded-lg">
+                                <X size={18} />
+                            </button>
+                        </div>
+                        <div className="p-6 space-y-3">
+                            <button
+                                onClick={leaveAndTransferHost}
+                                className="w-full px-5 py-3 rounded-2xl bg-white text-black font-bold transition-all transform active:scale-[0.98] flex items-center justify-between"
+                            >
+                                <span>{t('leave_transfer_btn') || 'Leave & transfer host'}</span>
+                                <ArrowRight size={18} />
+                            </button>
+                            <button
+                                onClick={closeRoomForEveryone}
+                                className="w-full px-5 py-3 rounded-2xl bg-red-600 hover:bg-red-500 text-white font-bold transition-all transform active:scale-[0.98] flex items-center justify-between"
+                            >
+                                <span>{t('close_room_btn') || t('confirm_close_room') || 'Close room'}</span>
+                                <AlertTriangle size={18} />
+                            </button>
+                            <div className="pt-2 flex justify-end">
+                                <button
+                                    onClick={() => setIsLeaveOptionsOpen(false)}
+                                    className="px-5 py-2 rounded-xl font-medium text-gray-400 hover:text-white hover:bg-gray-800 transition-all border border-transparent hover:border-gray-700"
+                                >
+                                    {t('cancel_btn')}
                                 </button>
                             </div>
                         </div>

@@ -51,8 +51,13 @@ test.describe('FreeMeeting App E2E', () => {
     await page.getByText('Self-Hosted').click();
     
     // Verify WebRTC Meeting component is loaded
-    await expect(page.getByText('Self-Hosted WebRTC Meeting')).toBeVisible();
-    await expect(page.getByPlaceholder('e.g. room-123')).toBeVisible();
+    await expect(page.getByPlaceholder(/room-123/i)).toBeVisible();
+    await expect(page.getByText(/Unlimited Meeting|Self-Hosted WebRTC Meeting/i)).toBeVisible();
+
+    await page.getByRole('button', { name: /Create/i }).click();
+    await expect(page.getByText(/New Room ID/i)).toBeVisible();
+    await expect(page.getByText(/Room name/i)).toBeVisible();
+    await page.getByRole('button', { name: /Join/i }).click();
     
     // Verify "Back" button works
     await page.getByText('Back to Home').click();

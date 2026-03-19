@@ -33,5 +33,3 @@ server/audit_logs.json
 # Docker
 docker-compose.override.yml
 
-# Local scripts (do not commit)
-scripts/

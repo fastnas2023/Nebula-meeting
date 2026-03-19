@@ -6,6 +6,8 @@ const path = require('path');
 require('dotenv').config();
 const { RtcTokenBuilder, RtcRole } = require('agora-token');
 const roleManager = require('./roleManager');
+const { markRoomEmpty, markRoomNonEmpty, sweepRooms } = require('./roomCleanup');
+const { resolveCreatorKey, countRoomsByCreatorKey, pickNewCreatorSocketId } = require('./roomPolicy');
 
 const app = express();
 app.use(cors());
@@ -54,18 +56,27 @@ app.get('/api/logs', (req, res) => {
 // Get active rooms
 app.get('/api/rooms', (req, res) => {
   try {
+    const ttlMs = Number(process.env.ROOM_IDLE_TTL_MS) || 2 * 60 * 60 * 1000;
+    sweepRooms({
+      rooms,
+      roomRoles,
+      adapterRoomSize: (roomId) => io.sockets.adapter.rooms.get(roomId)?.size || 0,
+      now: Date.now(),
+      ttlMs,
+    });
     const roomList = Object.entries(rooms).map(([roomId, data]) => {
       const roomSockets = io.sockets.adapter.rooms.get(roomId);
       return {
         roomId,
         creator: data.creator, // userId
         creatorName: data.creatorName || 'Unknown',
+        roomName: data.roomName || null,
         createdAt: data.createdAt,
         isProtected: !!data.password, // Check if password exists
         userCount: roomSockets ? roomSockets.size : 0
       };
     });
-    res.json(roomList);
+    res.json({ rooms: roomList, roomIdleTtlMs: ttlMs });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -155,10 +166,22 @@ const rooms = {};
 // In-memory role mapping: { roomId: { userId: roleName } }
 const roomRoles = {};
 
+const roomCleanupIntervalMs = Number(process.env.ROOM_CLEANUP_INTERVAL_MS) || 60 * 1000;
+setInterval(() => {
+  const ttlMs = Number(process.env.ROOM_IDLE_TTL_MS) || 2 * 60 * 60 * 1000;
+  sweepRooms({
+    rooms,
+    roomRoles,
+    adapterRoomSize: (roomId) => io.sockets.adapter.rooms.get(roomId)?.size || 0,
+    now: Date.now(),
+    ttlMs,
+  });
+}, roomCleanupIntervalMs);
+
 io.on('connection', (socket) => {
   console.log('New connection:', socket.id);
 
-  socket.on('join-room', (roomId, userId, username, password) => {
+  socket.on('join-room', (roomId, userId, username, password, roomName, clientKey) => {
     // Leave previous rooms if any (optional, depending on use case)
     // Array.from(socket.rooms).forEach(room => {
     //   if (room !== socket.id) socket.leave(room);
@@ -175,13 +198,22 @@ io.on('connection', (socket) => {
             return;
         }
     } else {
+      const creatorKey = resolveCreatorKey(socket, clientKey);
+      const maxRooms = Number(process.env.ROOMS_PER_CREATOR_LIMIT) || 10;
+      const created = countRoomsByCreatorKey(rooms, creatorKey);
+      if (created >= maxRooms) {
+        socket.emit('error', `Room creation limit reached (${maxRooms})`);
+        return;
+      }
       // Create new room
       console.log(`Creating new room ${roomId} with creator ${userId}`);
       rooms[roomId] = {
         creator: userId,
         creatorName: username,
         createdAt: Date.now(),
-        password: password || null // Store password if provided
+        password: password || null, // Store password if provided
+        roomName: typeof roomName === 'string' ? roomName.trim().slice(0, 60) : null,
+        creatorKey
       };
     }
 
@@ -191,18 +223,13 @@ io.on('connection', (socket) => {
       roomRoles[roomId] = {};
     }
 
-    // Check if user is the creator
-    if (rooms[roomId].creator === userId) {
+    const roomSize = io.sockets.adapter.rooms.get(roomId)?.size || 0;
+    if (roomSize === 0) {
+      rooms[roomId].creator = userId;
+      rooms[roomId].creatorName = username;
       assignedRole = 'creator';
-    } else {
-      // Check if room has any users (using socket.io adapter)
-      // Fallback for legacy logic or if creator logic fails: first user is admin/creator
-      const roomSize = io.sockets.adapter.rooms.get(roomId)?.size || 0;
-      if (roomSize === 0 && !rooms[roomId].creator) {
-         // Should not happen if we just created it above, but good for safety
-         rooms[roomId].creator = userId;
-         assignedRole = 'creator';
-      }
+    } else if (rooms[roomId].creator === userId) {
+      assignedRole = 'creator';
     }
     
     console.log(`Assigning role ${assignedRole} to user ${userId} in room ${roomId}`);
@@ -214,6 +241,7 @@ io.on('connection', (socket) => {
     socket.userData = { roomId, userId, username, joinedAt };
 
     socket.join(roomId);
+    markRoomNonEmpty(rooms, roomId);
 
     const roomSockets = io.sockets.adapter.rooms.get(roomId);
     const users = [];
@@ -240,7 +268,8 @@ io.on('connection', (socket) => {
     socket.emit('room-info', {
       creator: rooms[roomId].creator,
       createdAt: rooms[roomId].createdAt,
-      isCreator: rooms[roomId].creator === userId
+      isCreator: rooms[roomId].creator === userId,
+      roomName: rooms[roomId].roomName || null,
     });
 
   });
@@ -408,72 +437,45 @@ io.on('connection', (socket) => {
         
         // Get remaining users in the room
         const roomSockets = io.sockets.adapter.rooms.get(roomId);
-        let newCreatorId = null;
-
         if (roomSockets && roomSockets.size > 0) {
-            // Pick the first available socket as new creator
-            // In a real app, we might check join time or other metrics
-            // roomSockets is a Set of socket IDs. We need to map to user IDs if possible, 
-            // but our userData is on socket. We need to find the socket that is NOT the current one (which is disconnecting).
-            // Actually, 'disconnect' fires, the socket is still in the room? 
-            // No, socket.io removes it automatically? It depends on timing.
-            // Usually 'disconnecting' has rooms, 'disconnect' might not.
-            // But we have roomRoles which has userIds.
-            
-            const remainingUserIds = Object.keys(roomRoles[roomId] || {}).filter(uid => uid !== userId);
-            
-            if (remainingUserIds.length > 0) {
-                // Pick the first one (arbitrary transfer)
-                newCreatorId = remainingUserIds[0];
-                
-                // Find socket for newCreatorId to get username
-                const roomSockets = io.sockets.adapter.rooms.get(roomId);
-                let newCreatorName = 'Unknown';
-                if (roomSockets) {
-                    for (const socketId of roomSockets) {
-                        const s = io.sockets.sockets.get(socketId);
-                        if (s && s.userData && s.userData.userId === newCreatorId) {
-                            newCreatorName = s.userData.username;
-                            break;
-                        }
-                    }
-                }
-                
-                rooms[roomId].creator = newCreatorId;
-                rooms[roomId].creatorName = newCreatorName;
-                roomRoles[roomId][newCreatorId] = 'creator';
-                
-                console.log(`Transferred ownership to ${newCreatorId} (${newCreatorName})`);
-                
-                // Notify everyone
-                io.to(roomId).emit('room-info', {
-                    creator: newCreatorId,
-                    creatorName: newCreatorName,
-                    createdAt: rooms[roomId].createdAt
-                });
-                io.to(roomId).emit('role-updated', { userId: newCreatorId, newRole: 'creator' });
-                io.to(roomId).emit('notification', `Host left. Ownership transferred to ${newCreatorId}`);
-            } else {
-                console.log(`No users left in room ${roomId}. Deleting room.`);
-                delete rooms[roomId];
-            }
+          const pick = pickNewCreatorSocketId(roomSockets, io.sockets.sockets, userId);
+          if (pick) {
+            rooms[roomId].creator = pick.userId;
+            rooms[roomId].creatorName = pick.username;
+            if (!roomRoles[roomId]) roomRoles[roomId] = {};
+            roomRoles[roomId][pick.userId] = 'creator';
+
+            console.log(`Transferred ownership to ${pick.userId} (${pick.username})`);
+
+            io.to(roomId).emit('room-info', {
+              creator: pick.userId,
+              creatorName: pick.username,
+              createdAt: rooms[roomId].createdAt,
+              roomName: rooms[roomId].roomName || null,
+            });
+            io.to(roomId).emit('role-updated', { userId: pick.userId, newRole: 'creator' });
+          } else {
+            markRoomEmpty(rooms, roomId, Date.now());
+          }
         } else {
-             // Room is empty
-             delete rooms[roomId];
+          markRoomEmpty(rooms, roomId, Date.now());
         }
       }
 
       // Clean up role data
       if (roomRoles[roomId]) {
         delete roomRoles[roomId][userId];
-        if (Object.keys(roomRoles[roomId]).length === 0) {
-          delete roomRoles[roomId];
-          if (rooms[roomId]) delete rooms[roomId]; // Double check cleanup
-        }
+        if (Object.keys(roomRoles[roomId]).length === 0) delete roomRoles[roomId];
       }
 
       console.log(`Broadcasting user-disconnected for ${userId} to room ${roomId}`);
       io.to(roomId).emit('user-disconnected', userId);
+      const size = io.sockets.adapter.rooms.get(roomId)?.size || 0;
+      if (size === 0) {
+        markRoomEmpty(rooms, roomId, Date.now());
+      } else {
+        markRoomNonEmpty(rooms, roomId);
+      }
     } else {
       console.log('User disconnected (not in room):', socket.id);
     }
