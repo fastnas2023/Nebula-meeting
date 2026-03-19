@@ -182,7 +182,7 @@ pm2 start index.js --name "nebula-meeting"
 *   进入 **文件** -> `/www/wwwroot` 目录。
 *   点击 **终端**，执行克隆命令：
     ```bash
-    git clone https://github.com/fastnas2023/freemeeting.git nebula-meeting
+    git clone https://github.com/fastnas2023/Nebula-meeting.git nebula-meeting
     ```
 *   或者直接上传源码包并解压。
 
