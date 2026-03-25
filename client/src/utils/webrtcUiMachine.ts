@@ -1,4 +1,5 @@
 export type UiMode = 'welcome' | 'setup' | 'meeting';
+export type MeetingPhase = 'welcome' | 'setup' | 'joining' | 'meeting' | 'reconnecting' | 'leaving' | 'kicked' | 'room-closed';
 export type SignalingState = 'connected' | 'disconnected';
 export type ConnectionStatus = 'new' | 'checking' | 'connected' | 'failed' | 'disconnected' | 'closed';
 
@@ -12,6 +13,7 @@ export type UiEffect =
 
 export type UiState = {
   uiMode: UiMode;
+  meetingPhase: MeetingPhase;
   signalingState: SignalingState;
   connectionStatus: ConnectionStatus;
 
@@ -28,11 +30,13 @@ export type UiState = {
 
   isJoining: boolean;
   remoteCount: number;
+  lastFailureReason: 'permissionDenied' | 'deviceNotFound' | 'httpsRequired' | 'unknown' | null;
 };
 
 export function createInitialUiState(): UiState {
   return {
     uiMode: 'welcome',
+    meetingPhase: 'welcome',
     signalingState: 'connected',
     connectionStatus: 'new',
     isAudioEnabled: true,
@@ -45,6 +49,7 @@ export function createInitialUiState(): UiState {
     pendingRoomId: null,
     isJoining: false,
     remoteCount: 0,
+    lastFailureReason: null,
   };
 }
 
@@ -96,37 +101,51 @@ export function reduceUi(state: UiState, event: UiEvent): { state: UiState; effe
         effects.push({ type: 'toast', level: 'error', i18nKey: 'enter_room_id_error' });
         return { state, effects };
       }
-      return { state: { ...state, uiMode: 'setup' }, effects };
+      return { state: { ...state, uiMode: 'setup', meetingPhase: 'setup' }, effects };
     }
 
     case 'user.confirmJoinStart': {
       if (state.uiMode !== 'setup') return { state, effects };
-      return { state: { ...state, isJoining: true }, effects };
+      return { state: { ...state, isJoining: true, meetingPhase: 'joining' }, effects };
     }
 
     case 'media.joinSuccess': {
       if (state.uiMode !== 'setup') return { state, effects };
       effects.push({ type: 'persistUrlRoomId', roomId: state.roomId });
       effects.push({ type: 'socketEmit', event: 'join-room', payload: { roomId: state.roomId } });
-      return { state: { ...state, uiMode: 'meeting', isJoining: false }, effects };
+      return { state: { ...state, uiMode: 'meeting', meetingPhase: 'meeting', isJoining: false, lastFailureReason: null }, effects };
     }
 
     case 'media.joinFailure': {
       const key = event.reason === 'permissionDenied' || event.reason === 'deviceNotFound' ? 'device_access_error' : 'device_access_error';
       effects.push({ type: 'toast', level: 'error', i18nKey: key });
-      return { state: { ...state, isJoining: false }, effects };
+      return { state: { ...state, uiMode: 'setup', meetingPhase: 'setup', isJoining: false, lastFailureReason: event.reason }, effects };
     }
 
     case 'user.leaveMeeting':
       effects.push({ type: 'navigate', to: 'back' });
-      return { state: { ...state, uiMode: 'welcome', remoteCount: 0, isSharing: false, isRecording: false }, effects };
+      return { state: { ...state, uiMode: 'welcome', meetingPhase: 'leaving', remoteCount: 0, isSharing: false, isRecording: false }, effects };
 
     case 'socket.connected':
-      return { state: { ...state, signalingState: 'connected' }, effects };
+      return {
+        state: {
+          ...state,
+          signalingState: 'connected',
+          meetingPhase: state.meetingPhase === 'reconnecting' ? 'meeting' : state.meetingPhase,
+        },
+        effects,
+      };
 
     case 'socket.disconnected':
       effects.push({ type: 'toast', level: 'error', i18nKey: 'disconnected_signaling' });
-      return { state: { ...state, signalingState: 'disconnected' }, effects };
+      return {
+        state: {
+          ...state,
+          signalingState: 'disconnected',
+          meetingPhase: state.uiMode === 'meeting' ? 'reconnecting' : state.meetingPhase,
+        },
+        effects,
+      };
 
     case 'socket.connectError':
       effects.push({ type: 'toast', level: 'error', i18nKey: 'signaling_error' });
@@ -153,13 +172,13 @@ export function reduceUi(state: UiState, event: UiEvent): { state: UiState; effe
     case 'room.closed':
       effects.push({ type: 'toast', level: 'error', i18nKey: 'room_closed' });
       effects.push({ type: 'navigate', to: 'back' });
-      return { state: { ...state, uiMode: 'welcome', remoteCount: 0 }, effects };
+      return { state: { ...state, uiMode: 'welcome', meetingPhase: 'room-closed', remoteCount: 0 }, effects };
 
     case 'room.kicked':
       if (event.isSelf) {
         effects.push({ type: 'toast', level: 'error', i18nKey: 'you_were_kicked' });
         effects.push({ type: 'navigate', to: 'back' });
-        return { state: { ...state, uiMode: 'welcome', remoteCount: 0 }, effects };
+        return { state: { ...state, uiMode: 'welcome', meetingPhase: 'kicked', remoteCount: 0 }, effects };
       }
       effects.push({ type: 'toast', level: 'info', i18nKey: 'user_kicked_msg' });
       return { state, effects };
@@ -204,4 +223,3 @@ export function reduceUi(state: UiState, event: UiEvent): { state: UiState; effe
       return { state, effects };
   }
 }
-

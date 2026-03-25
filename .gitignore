@@ -11,6 +11,8 @@ pnpm-debug.log*
 **/coverage/
 client/playwright-report/
 client/test-results/
+server/public/*
+!server/public/.gitkeep
 
 # Env & secrets
 .env
@@ -32,4 +34,3 @@ server/audit_logs.json
 
 # Docker
 docker-compose.override.yml
-

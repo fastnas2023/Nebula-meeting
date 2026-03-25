@@ -31,7 +31,13 @@ function pickNewCreatorSocketId(roomSocketIds, socketsMap, excludeUserId) {
     if (!userId || userId === excludeUserId) continue;
     const joinedAt = typeof s.userData.joinedAt === 'number' ? s.userData.joinedAt : Number.MAX_SAFE_INTEGER;
     if (!best || joinedAt < best.joinedAt) {
-      best = { socketId, userId, joinedAt, username: s.userData.username || 'Unknown' };
+      best = {
+        socketId,
+        userId,
+        participantId: s.userData.participantId || userId,
+        joinedAt,
+        username: s.userData.username || 'Unknown',
+      };
     }
   }
   return best;

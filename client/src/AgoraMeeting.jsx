@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import AgoraRTC from 'agora-rtc-sdk-ng';
+import { AgoraRTC } from 'agora-rtc-sdk-ng/esm';
 import { Cloud, Settings, LogOut, Video, Plus, Monitor, MonitorOff, PhoneOff, User, Check, AlertCircle, Wifi, Mic, Volume2 } from 'lucide-react';
 import { Loader } from './UI';
 import ZoomableVideoContainer from './components/ZoomableVideoContainer';

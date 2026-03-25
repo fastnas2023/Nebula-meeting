@@ -8,6 +8,8 @@ const { RtcTokenBuilder, RtcRole } = require('agora-token');
 const roleManager = require('./roleManager');
 const { markRoomEmpty, markRoomNonEmpty, sweepRooms } = require('./roomCleanup');
 const { resolveCreatorKey, countRoomsByCreatorKey, pickNewCreatorSocketId } = require('./roomPolicy');
+const { cleanupRoomSession, isTargetUserInRoom, listRoomUsers, parseJoinRoomArgs } = require('./roomSession');
+const { createParticipantId, createRoomSessionToken, verifyRoomSessionToken } = require('./roomAuth');
 
 const app = express();
 app.use(cors());
@@ -33,14 +35,10 @@ app.get('/api/roles', (req, res) => {
 // Update a role
 app.post('/api/roles/:targetRole', (req, res) => {
   const { targetRole } = req.params;
-  const { managerRole, updates } = req.body; // In real app, managerRole comes from Auth token
-
-  try {
-    const updatedRole = roleManager.updateRole(managerRole, targetRole, updates);
-    res.json(updatedRole);
-  } catch (err) {
-    res.status(403).json({ error: err.message });
-  }
+  res.status(403).json({
+    error: 'Role updates are disabled until authentication is implemented',
+    targetRole,
+  });
 });
 
 // Get audit logs
@@ -165,6 +163,67 @@ const rooms = {};
 
 // In-memory role mapping: { roomId: { userId: roleName } }
 const roomRoles = {};
+const roomParticipantRoles = {};
+const pendingReconnects = new Map();
+const reconnectGraceMs = Number(process.env.ROOM_RECONNECT_GRACE_MS) || 15000;
+
+function reconnectStateKey(roomId, participantId) {
+  return `${roomId}:${participantId}`;
+}
+
+function clearPendingReconnect(roomId, participantId) {
+  const key = reconnectStateKey(roomId, participantId);
+  const pending = pendingReconnects.get(key);
+  if (pending?.timeoutId) {
+    clearTimeout(pending.timeoutId);
+  }
+  pendingReconnects.delete(key);
+  return pending || null;
+}
+
+function scheduleReconnectCleanup(socket) {
+  const { roomId, userId, participantId, username } = socket.userData || {};
+  if (!roomId || !userId || !participantId) return;
+
+  if (roomRoles[roomId]) {
+    delete roomRoles[roomId][userId];
+    if (Object.keys(roomRoles[roomId]).length === 0) delete roomRoles[roomId];
+  }
+
+  io.to(roomId).emit('user-reconnecting', {
+    userId,
+    participantId,
+    username: username || 'Anonymous',
+  });
+
+  const key = reconnectStateKey(roomId, participantId);
+  const timeoutId = setTimeout(async () => {
+    const current = pendingReconnects.get(key);
+    if (!current || current.socketId !== userId) return;
+    pendingReconnects.delete(key);
+
+    await cleanupRoomSession({
+      socket,
+      io,
+      rooms,
+      roomRoles,
+      roomParticipantRoles,
+      markRoomEmpty,
+      markRoomNonEmpty,
+      pickNewCreatorSocketId,
+      leaveSocketRoom: false,
+      cleanupParticipantRole: true,
+      now: Date.now(),
+    });
+  }, reconnectGraceMs);
+
+  pendingReconnects.set(key, {
+    roomId,
+    participantId,
+    socketId: userId,
+    timeoutId,
+  });
+}
 
 const roomCleanupIntervalMs = Number(process.env.ROOM_CLEANUP_INTERVAL_MS) || 60 * 1000;
 setInterval(() => {
@@ -181,7 +240,20 @@ setInterval(() => {
 io.on('connection', (socket) => {
   console.log('New connection:', socket.id);
 
-  socket.on('join-room', (roomId, userId, username, password, roomName, clientKey) => {
+  const getRequesterRole = (roomId, participantId, userId) => {
+    return roomParticipantRoles[roomId]?.[participantId] || roomRoles[roomId]?.[userId] || null;
+  };
+
+  socket.on('join-room', (...args) => {
+    const { roomId, username, password, roomName, clientKey, roomSessionToken } = parseJoinRoomArgs(args);
+    const userId = socket.id;
+    const verifiedSession = verifyRoomSessionToken(roomSessionToken);
+    const canReuseSession = verifiedSession
+      && verifiedSession.roomId === roomId
+      && (!clientKey || !verifiedSession.clientKey || verifiedSession.clientKey === clientKey);
+    const participantId = canReuseSession ? verifiedSession.participantId : createParticipantId();
+    const pendingReconnect = clearPendingReconnect(roomId, participantId);
+    const previousSocketId = pendingReconnect?.socketId || null;
     // Leave previous rooms if any (optional, depending on use case)
     // Array.from(socket.rooms).forEach(room => {
     //   if (room !== socket.id) socket.leave(room);
@@ -209,6 +281,7 @@ io.on('connection', (socket) => {
       console.log(`Creating new room ${roomId} with creator ${userId}`);
       rooms[roomId] = {
         creator: userId,
+        creatorParticipantId: participantId,
         creatorName: username,
         createdAt: Date.now(),
         password: password || null, // Store password if provided
@@ -222,44 +295,61 @@ io.on('connection', (socket) => {
     if (!roomRoles[roomId]) {
       roomRoles[roomId] = {};
     }
+    if (!roomParticipantRoles[roomId]) {
+      roomParticipantRoles[roomId] = {};
+    }
 
     const roomSize = io.sockets.adapter.rooms.get(roomId)?.size || 0;
     if (roomSize === 0) {
       rooms[roomId].creator = userId;
+      rooms[roomId].creatorParticipantId = participantId;
       rooms[roomId].creatorName = username;
       assignedRole = 'creator';
-    } else if (rooms[roomId].creator === userId) {
+    } else if (rooms[roomId].creatorParticipantId === participantId) {
+      rooms[roomId].creator = userId;
+      rooms[roomId].creatorName = username;
       assignedRole = 'creator';
+    } else if (roomParticipantRoles[roomId][participantId]) {
+      assignedRole = roomParticipantRoles[roomId][participantId];
     }
     
     console.log(`Assigning role ${assignedRole} to user ${userId} in room ${roomId}`);
 
     // Store role
     roomRoles[roomId][userId] = assignedRole;
+    roomParticipantRoles[roomId][participantId] = assignedRole;
+
+    if (previousSocketId && roomRoles[roomId]) {
+      delete roomRoles[roomId][previousSocketId];
+    }
 
     const joinedAt = Date.now();
-    socket.userData = { roomId, userId, username, joinedAt };
+    socket.userData = { roomId, userId, username, joinedAt, participantId, clientKey: clientKey || null };
 
     socket.join(roomId);
     markRoomNonEmpty(rooms, roomId);
 
     const roomSockets = io.sockets.adapter.rooms.get(roomId);
-    const users = [];
-    if (roomSockets) {
-      for (const socketId of roomSockets) {
-        const s = io.sockets.sockets.get(socketId);
-        if (s && s.userData && s.userData.roomId === roomId) {
-          users.push({
-            userId: s.userData.userId,
-            username: s.userData.username || 'Anonymous',
-            joinedAt: s.userData.joinedAt || Date.now(),
-          });
-        }
-      }
-    }
+    const users = listRoomUsers(roomId, roomSockets, io.sockets.sockets);
 
     socket.emit('room-users', users);
-    socket.to(roomId).emit('user-connected', { userId, username: username || 'Anonymous', joinedAt });
+    socket.emit('room-session', {
+      participantId,
+      token: createRoomSessionToken({ roomId, participantId, clientKey: clientKey || null, username }),
+      rejoined: !!previousSocketId,
+    });
+
+    if (previousSocketId && previousSocketId !== userId) {
+      socket.to(roomId).emit('user-reconnected', {
+        oldUserId: previousSocketId,
+        newUserId: userId,
+        participantId,
+        username: username || 'Anonymous',
+        joinedAt,
+      });
+    } else {
+      socket.to(roomId).emit('user-connected', { userId, participantId, username: username || 'Anonymous', joinedAt });
+    }
     
     // Emit assigned role to the user
     socket.emit('role-assigned', assignedRole);
@@ -267,24 +357,45 @@ io.on('connection', (socket) => {
     // Emit room info including creator
     socket.emit('room-info', {
       creator: rooms[roomId].creator,
+      creatorParticipantId: rooms[roomId].creatorParticipantId,
       createdAt: rooms[roomId].createdAt,
-      isCreator: rooms[roomId].creator === userId,
+      isCreator: rooms[roomId].creatorParticipantId === participantId,
       roomName: rooms[roomId].roomName || null,
     });
 
   });
 
+  socket.on('leave-room', async () => {
+    const { roomId, userId, participantId } = socket.userData || {};
+    if (!roomId || !userId || !participantId) return;
+    console.log(`User ${userId} leaving room ${roomId}`);
+    clearPendingReconnect(roomId, participantId);
+    await cleanupRoomSession({
+      socket,
+      io,
+      rooms,
+      roomRoles,
+      roomParticipantRoles,
+      markRoomEmpty,
+      markRoomNonEmpty,
+      pickNewCreatorSocketId,
+      leaveSocketRoom: true,
+      cleanupParticipantRole: true,
+      now: Date.now(),
+    });
+  });
+
   // Role Management Signaling
   socket.on('update-role', ({ targetUserId, newRole }) => {
     console.log(`[Role] update-role request from ${socket.id} for ${targetUserId} to ${newRole}`);
-    const { roomId, userId } = socket.userData || {};
-    if (!roomId || !userId) {
+    const { roomId, userId, participantId } = socket.userData || {};
+    if (!roomId || !userId || !participantId) {
         console.log(`[Role] update-role failed: missing userData`, socket.userData);
         return;
     }
 
     // Verify requester is admin or creator
-    const requesterRole = roomRoles[roomId]?.[userId];
+    const requesterRole = getRequesterRole(roomId, participantId, userId);
     console.log(`[Role] requester ${userId} role: ${requesterRole}`);
     
     if (requesterRole !== 'admin' && requesterRole !== 'creator') {
@@ -293,9 +404,16 @@ io.on('connection', (socket) => {
     }
 
     // Update state
-    if (roomRoles[roomId]) {
-      roomRoles[roomId][targetUserId] = newRole;
+    const targetSocket = io.sockets.sockets.get(targetUserId);
+    if (!targetSocket?.userData || targetSocket.userData.roomId !== roomId) {
+      socket.emit('error', 'Target user is not in the same room');
+      return;
     }
+    const targetParticipantId = targetSocket.userData.participantId || targetUserId;
+    if (!roomRoles[roomId]) roomRoles[roomId] = {};
+    if (!roomParticipantRoles[roomId]) roomParticipantRoles[roomId] = {};
+    roomRoles[roomId][targetUserId] = newRole;
+    roomParticipantRoles[roomId][targetParticipantId] = newRole;
 
     // Broadcast update to room (so everyone updates UI)
     io.to(roomId).emit('role-updated', { userId: targetUserId, newRole });
@@ -303,13 +421,13 @@ io.on('connection', (socket) => {
 
   socket.on('kick-user', ({ targetUserId }) => {
     console.log(`[Role] kick-user request from ${socket.id} for ${targetUserId}`);
-    const { roomId, userId } = socket.userData || {};
-    if (!roomId || !userId) {
+    const { roomId, userId, participantId } = socket.userData || {};
+    if (!roomId || !userId || !participantId) {
         console.log(`[Role] kick-user failed: missing userData`, socket.userData);
         return;
     }
 
-    const requesterRole = roomRoles[roomId]?.[userId];
+    const requesterRole = getRequesterRole(roomId, participantId, userId);
     console.log(`[Role] requester ${userId} role: ${requesterRole}`);
 
     // Check permissions (Creator can kick anyone, Admin can kick participants)
@@ -326,13 +444,13 @@ io.on('connection', (socket) => {
 
   socket.on('mute-user', ({ targetUserId, kind }) => { // kind: 'audio' | 'video'
     console.log(`[Role] mute-user request from ${socket.id} for ${targetUserId} (${kind})`);
-    const { roomId, userId } = socket.userData || {};
-    if (!roomId || !userId) {
+    const { roomId, userId, participantId } = socket.userData || {};
+    if (!roomId || !userId || !participantId) {
         console.log(`[Role] mute-user failed: missing userData`, socket.userData);
         return;
     }
 
-    const requesterRole = roomRoles[roomId]?.[userId];
+    const requesterRole = getRequesterRole(roomId, participantId, userId);
     console.log(`[Role] requester ${userId} role: ${requesterRole}`);
 
     // Check permissions (Admin or Creator can mute)
@@ -380,13 +498,34 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('receive-message', msgData);
   });
 
+  socket.on('request-high-quality', ({ targetUserId }) => {
+    const { roomId, userId, participantId } = socket.userData || {};
+    if (!roomId || !userId || !participantId) {
+      socket.emit('error', 'Unauthorized: Not currently in a room');
+      return;
+    }
+
+    const requesterRole = getRequesterRole(roomId, participantId, userId);
+    if (requesterRole !== 'admin' && requesterRole !== 'creator') {
+      socket.emit('error', 'Unauthorized: Insufficient permissions');
+      return;
+    }
+
+    if (!isTargetUserInRoom(io.sockets.sockets, roomId, targetUserId)) {
+      socket.emit('error', 'Target user is not in the same room');
+      return;
+    }
+
+    io.to(targetUserId).emit('request-high-quality');
+  });
+
   socket.on('close-room', () => {
     console.log(`[Role] close-room request from ${socket.id}`);
-    const { roomId, userId } = socket.userData || {};
-    if (!roomId || !userId) return;
+    const { roomId, userId, participantId } = socket.userData || {};
+    if (!roomId || !userId || !participantId) return;
 
     // Only Creator can close room
-    if (rooms[roomId]?.creator !== userId) {
+    if (rooms[roomId]?.creatorParticipantId !== participantId) {
         socket.emit('error', 'Unauthorized: Only creator can close the room');
         return;
     }
@@ -397,6 +536,7 @@ io.on('connection', (socket) => {
     // Cleanup
     delete rooms[roomId];
     delete roomRoles[roomId];
+    delete roomParticipantRoles[roomId];
     
     // Disconnect all sockets in room? Or let client handle redirection.
     // Ideally, client receives 'room-closed' and redirects to home.
@@ -425,57 +565,12 @@ io.on('connection', (socket) => {
     io.to(payload.target).emit('ice-candidate', payload);
   });
 
-  socket.on('disconnect', () => {
-    const { roomId, userId } = socket.userData || {};
-    
-    if (roomId && userId) {
+  socket.on('disconnect', async () => {
+    const { roomId, userId, participantId } = socket.userData || {};
+
+    if (roomId && userId && participantId) {
       console.log(`User ${userId} disconnected from room ${roomId}`);
-      
-      // Handle Creator Departure
-      if (rooms[roomId] && rooms[roomId].creator === userId) {
-        console.log(`Creator ${userId} left room ${roomId}. Transferring ownership...`);
-        
-        // Get remaining users in the room
-        const roomSockets = io.sockets.adapter.rooms.get(roomId);
-        if (roomSockets && roomSockets.size > 0) {
-          const pick = pickNewCreatorSocketId(roomSockets, io.sockets.sockets, userId);
-          if (pick) {
-            rooms[roomId].creator = pick.userId;
-            rooms[roomId].creatorName = pick.username;
-            if (!roomRoles[roomId]) roomRoles[roomId] = {};
-            roomRoles[roomId][pick.userId] = 'creator';
-
-            console.log(`Transferred ownership to ${pick.userId} (${pick.username})`);
-
-            io.to(roomId).emit('room-info', {
-              creator: pick.userId,
-              creatorName: pick.username,
-              createdAt: rooms[roomId].createdAt,
-              roomName: rooms[roomId].roomName || null,
-            });
-            io.to(roomId).emit('role-updated', { userId: pick.userId, newRole: 'creator' });
-          } else {
-            markRoomEmpty(rooms, roomId, Date.now());
-          }
-        } else {
-          markRoomEmpty(rooms, roomId, Date.now());
-        }
-      }
-
-      // Clean up role data
-      if (roomRoles[roomId]) {
-        delete roomRoles[roomId][userId];
-        if (Object.keys(roomRoles[roomId]).length === 0) delete roomRoles[roomId];
-      }
-
-      console.log(`Broadcasting user-disconnected for ${userId} to room ${roomId}`);
-      io.to(roomId).emit('user-disconnected', userId);
-      const size = io.sockets.adapter.rooms.get(roomId)?.size || 0;
-      if (size === 0) {
-        markRoomEmpty(rooms, roomId, Date.now());
-      } else {
-        markRoomNonEmpty(rooms, roomId);
-      }
+      scheduleReconnectCleanup(socket);
     } else {
       console.log('User disconnected (not in room):', socket.id);
     }

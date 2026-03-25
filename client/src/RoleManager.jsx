@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { 
   Shield, 
   Users, 
-  Settings, 
   Save, 
   History, 
   Check, 
@@ -22,10 +21,8 @@ const RoleManager = ({ onBack }) => {
   const [activeTab, setActiveTab] = useState('roles'); // 'roles' or 'logs'
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [saveStatus, setSaveStatus] = useState(null); // 'saving', 'success', 'error'
-
-  // Simulate current user being an Admin
-  const currentUserRole = 'admin'; 
+  const saveStatus = null;
+  const isReadOnly = true;
 
   useEffect(() => {
     fetchRoles();
@@ -71,29 +68,7 @@ const RoleManager = ({ onBack }) => {
   };
 
   const handleSave = async () => {
-    if (!selectedRole) return;
-    setSaveStatus('saving');
-    
-    try {
-      const roleData = roles[selectedRole];
-      const res = await fetch(`${API_URL}/api/roles/${selectedRole}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          managerRole: currentUserRole,
-          updates: roleData
-        })
-      });
-
-      if (!res.ok) throw new Error('Failed to update');
-      
-      setSaveStatus('success');
-      setTimeout(() => setSaveStatus(null), 2000);
-      fetchLogs(); // Refresh logs
-    } catch (_err) {
-      setSaveStatus('error');
-      setTimeout(() => setSaveStatus(null), 2000);
-    }
+    if (!selectedRole || isReadOnly) return;
   };
 
   if (loading) return <div className="p-8 text-white">Loading Role Manager...</div>;
@@ -163,6 +138,12 @@ const RoleManager = ({ onBack }) => {
           <div className="lg:col-span-3 bg-gray-800 rounded-2xl border border-gray-700 p-6 shadow-xl">
             {selectedRole && roles[selectedRole] ? (
               <div className="space-y-6">
+                {isReadOnly && (
+                  <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-200">
+                    Role editing is temporarily disabled until authentication is implemented. You can still review permissions and audit logs here.
+                  </div>
+                )}
+
                 <div className="flex justify-between items-start">
                   <div>
                     <h2 className="text-3xl font-bold flex items-center gap-3">
@@ -179,17 +160,16 @@ const RoleManager = ({ onBack }) => {
                   </div>
                   <button 
                     onClick={handleSave}
-                    disabled={saveStatus === 'saving'}
+                    disabled={isReadOnly}
                     className={`px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 transition-all ${
                       saveStatus === 'success' ? 'bg-green-600' :
                       saveStatus === 'error' ? 'bg-red-600' :
-                      'bg-blue-600 hover:bg-blue-500'
+                      'bg-gray-700 text-gray-400 cursor-not-allowed'
                     }`}
                   >
-                    {saveStatus === 'saving' ? 'Saving...' : 
-                     saveStatus === 'success' ? <><Check size={18} /> Saved</> : 
+                    {saveStatus === 'success' ? <><Check size={18} /> Saved</> : 
                      saveStatus === 'error' ? <><AlertTriangle size={18} /> Error</> : 
-                     <><Save size={18} /> Save Changes</>}
+                     <><Save size={18} /> Read Only</>}
                   </button>
                 </div>
 
@@ -213,7 +193,7 @@ const RoleManager = ({ onBack }) => {
                           className="sr-only peer"
                           checked={value}
                           onChange={(e) => handlePermissionChange(selectedRole, perm, e.target.checked)}
-                          disabled={selectedRole === 'admin' && perm === 'canManageRoles'} // Prevent locking out admin
+                          disabled={true}
                         />
                         <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                       </label>

@@ -1,0 +1,370 @@
+import { Activity, Clock3, Crown, FlipHorizontal, Maximize2, MicOff, Minimize2, RotateCw, Shield, TriangleAlert, Users, VideoOff, Wifi, WifiOff } from 'lucide-react';
+import { useEffect, useRef } from 'react';
+import ZoomableVideoContainer from '../ZoomableVideoContainer';
+import VideoTile from '../VideoTile';
+import ParticipantTileActions from './ParticipantTileActions';
+
+function MeetingVideoGrid({
+  t,
+  orderedTileIds,
+  isChatOpen,
+  activeFullscreenTileId,
+  fullscreenTileId,
+  fullscreenHostRef,
+  focusedTileId,
+  isAudioEnabled,
+  isMirrored,
+  setIsMirrored,
+  toggleFullscreen,
+  localVideoRef,
+  localStreamRef,
+  isSharing,
+  isVideoEnabled,
+  shouldFlipLocalVideoCss,
+  remoteStreams,
+  participantMeta,
+  remoteRoles,
+  participantConnectionStatus,
+  participantStats,
+  hasPermission,
+  handleUpdateRole,
+  handleKickUser,
+  handleMuteUser,
+  requestHighQuality,
+  roomId,
+}) {
+  const participantTileIds = orderedTileIds.filter((id) => id !== 'local');
+  const remoteStreamCount = Object.keys(remoteStreams).length;
+  const remoteParticipantCount = participantTileIds.length;
+  const focusModeActive = !!focusedTileId && orderedTileIds.includes(focusedTileId);
+  const secondaryTileIds = focusModeActive ? orderedTileIds.filter((id) => id !== focusedTileId) : [];
+
+  const qualityBadge = (stats) => {
+    if (!stats?.quality) return null;
+
+    if (stats.quality === 'poor') {
+      return {
+        icon: TriangleAlert,
+        label: t('network_quality_poor') || 'Poor',
+        className: 'bg-red-500/20 text-red-100 border-red-500/20',
+      };
+    }
+
+    if (stats.quality === 'fair') {
+      return {
+        icon: WifiOff,
+        label: t('network_quality_fair') || 'Fair',
+        className: 'bg-amber-500/20 text-amber-100 border-amber-500/20',
+      };
+    }
+
+    return {
+      icon: Wifi,
+      label: t('network_quality_good') || 'Good',
+      className: 'bg-emerald-500/20 text-emerald-100 border-emerald-500/20',
+    };
+  };
+
+  const renderParticipantPlaceholder = ({ displayName, peerStatus, peerStats, mutedVideo }) => {
+    const initials = (displayName || '?')
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() || '')
+      .join('') || '?';
+
+    const reconnecting = peerStatus === 'reconnecting' || peerStatus === 'checking' || peerStatus === 'connecting';
+    const statusCopy = reconnecting
+      ? (t('participant_reconnecting_desc') || 'Reconnecting to audio and video...')
+      : mutedVideo
+        ? (t('camera_off') || 'Camera off')
+        : (t('waiting_for_video_stream') || 'Waiting for video stream...');
+
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.12),transparent_40%),rgba(2,6,23,0.88)] px-6 text-center">
+        <div className="flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br from-slate-700 to-slate-900 text-3xl font-bold text-white shadow-lg">
+          {initials}
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-center gap-2 text-sm font-semibold text-white">
+            {reconnecting ? <RotateCw size={16} className="animate-spin text-amber-300" /> : <VideoOff size={16} className="text-gray-300" />}
+            <span>{statusCopy}</span>
+          </div>
+          {peerStats ? (
+            <p className="text-xs text-gray-400">
+              {[
+                typeof peerStats.rttMs === 'number' ? `${peerStats.rttMs}ms RTT` : null,
+                typeof peerStats.packetLossPct === 'number' ? `${peerStats.packetLossPct}% loss` : null,
+                typeof peerStats.bitrateKbps === 'number' ? `${peerStats.bitrateKbps} kbps` : null,
+              ].filter(Boolean).join(' · ')}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+
+  const renderTile = (tileId) => {
+    if (tileId === 'local') {
+      return (
+        <VideoTile
+          key="local"
+          tileId="local"
+          mode={
+            activeFullscreenTileId === 'local'
+              ? (fullscreenTileId === 'local' ? 'fullscreen' : 'exiting')
+              : 'grid'
+          }
+          controlsAlwaysVisible={activeFullscreenTileId === 'local'}
+          portalTarget={fullscreenHostRef.current}
+          title={t('you')}
+          topLeftExtra={
+            <div className="flex items-center gap-2">
+              {!isAudioEnabled ? <MicOff size={12} className="text-red-500" /> : null}
+              {isSharing ? (
+                <div className="rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-100">
+                  {t('sharing_focus_badge') || 'Sharing'}
+                </div>
+              ) : null}
+            </div>
+          }
+          topRightControls={
+            <>
+              <button
+                onClick={() => setIsMirrored(!isMirrored)}
+                className="p-2 bg-black/40 hover:bg-black/60 backdrop-blur-md text-white rounded-lg border border-white/10"
+                title={t('toggle_mirror') || 'Toggle Mirror'}
+              >
+                <FlipHorizontal size={16} className={isMirrored ? 'text-blue-400' : 'text-white'} />
+              </button>
+              <button
+                onClick={() => toggleFullscreen('local')}
+                className="p-2 bg-black/40 hover:bg-black/60 backdrop-blur-md text-white rounded-lg border border-white/10"
+                title={activeFullscreenTileId === 'local' ? (t('restore_video') || 'Restore') : (t('fullscreen_video') || 'Fullscreen')}
+              >
+                {activeFullscreenTileId === 'local' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              </button>
+            </>
+          }
+        >
+          <ZoomableVideoContainer>
+            <video
+              ref={(el) => {
+                localVideoRef.current = el;
+                if (el && localStreamRef.current && el.srcObject !== localStreamRef.current) {
+                  el.srcObject = localStreamRef.current;
+                }
+              }}
+              autoPlay
+              playsInline
+              muted
+              className={`w-full h-full object-contain ${shouldFlipLocalVideoCss ? 'transform scale-x-[-1]' : ''} ${!isSharing && !isVideoEnabled ? 'hidden' : ''}`}
+            />
+          </ZoomableVideoContainer>
+
+          {(!isSharing && (!localStreamRef.current || localStreamRef.current.getVideoTracks().length === 0 || !isVideoEnabled)) && (
+            <div className="flex flex-col items-center justify-center">
+              <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-blue-600 to-purple-600 flex items-center justify-center text-3xl font-bold text-white shadow-lg mb-4">
+                {t('me_placeholder')}
+              </div>
+              <p className="text-gray-500 text-sm">{t('camera_off')}</p>
+            </div>
+          )}
+        </VideoTile>
+      );
+    }
+
+    const userId = tileId;
+    const stream = remoteStreams[userId];
+    if (!stream) return null;
+    const displayName = participantMeta[userId]?.name || t('user_label', { userId: userId.slice(0, 4) });
+    const remoteRole = remoteRoles[userId];
+    const peerStatus = participantConnectionStatus[userId];
+    const peerStats = participantStats[userId];
+    const hasAudioTrack = stream?.getAudioTracks().length > 0;
+    const hasVideoTrack = stream?.getVideoTracks().length > 0;
+    const mutedAudio = hasAudioTrack && stream.getAudioTracks().every((track) => track.muted || track.enabled === false);
+    const mutedVideo = hasVideoTrack && stream.getVideoTracks().every((track) => track.muted || track.enabled === false);
+    const quality = qualityBadge(peerStats);
+    const statusTone = peerStatus === 'connected'
+      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20'
+      : peerStatus === 'unstable' || peerStatus === 'disconnected' || peerStatus === 'reconnecting'
+        ? 'bg-amber-500/15 text-amber-300 border-amber-500/20'
+        : peerStatus === 'failed'
+          ? 'bg-red-500/15 text-red-300 border-red-500/20'
+          : 'bg-gray-500/15 text-gray-300 border-gray-500/20';
+
+    if (!stream && !participantMeta[userId] && !peerStatus) return null;
+
+    return (
+      <VideoTile
+        key={userId}
+        tileId={userId}
+        mode={
+          activeFullscreenTileId === userId
+            ? (fullscreenTileId === userId ? 'fullscreen' : 'exiting')
+            : 'grid'
+        }
+        controlsAlwaysVisible={activeFullscreenTileId === userId}
+        portalTarget={fullscreenHostRef.current}
+        title={displayName}
+        topLeftExtra={
+          <div className="flex items-center gap-2">
+            {remoteRole ? (
+              <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold ${
+                remoteRole === 'admin' ? 'bg-purple-500/80 text-white' :
+                remoteRole === 'host' ? 'bg-orange-500/80 text-white' :
+                'bg-blue-500/50 text-white'
+              }`}>
+                {remoteRole === 'admin' && <Shield size={8} />}
+                {remoteRole === 'host' && <Crown size={8} />}
+                {remoteRole}
+              </div>
+            ) : null}
+            {peerStatus ? (
+              <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] uppercase font-medium ${statusTone}`}>
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-current" />
+                {peerStatus}
+              </div>
+            ) : null}
+            {quality ? (
+              <div
+                className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${quality.className}`}
+                title={[
+                  peerStats.rttMs ? `RTT ${peerStats.rttMs}ms` : null,
+                  typeof peerStats.packetLossPct === 'number' ? `Loss ${peerStats.packetLossPct}%` : null,
+                  typeof peerStats.bitrateKbps === 'number' ? `${peerStats.bitrateKbps} kbps` : null,
+                ].filter(Boolean).join(' · ')}
+              >
+                <quality.icon size={11} />
+                {quality.label}
+              </div>
+            ) : null}
+            {peerStats?.rttMs >= 500 ? (
+              <div className="flex items-center gap-1 rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-100">
+                <Clock3 size={11} />
+                {peerStats.rttMs}ms
+              </div>
+            ) : null}
+            {typeof peerStats?.packetLossPct === 'number' && peerStats.packetLossPct >= 3 ? (
+              <div className="flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-100">
+                <Activity size={11} />
+                {peerStats.packetLossPct}% loss
+              </div>
+            ) : null}
+            {peerStats?.frozen ? (
+              <div className="flex items-center gap-1 rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-100">
+                <VideoOff size={11} />
+                {t('video_frozen_badge') || 'Frozen'}
+              </div>
+            ) : null}
+            {mutedAudio ? (
+              <div className="rounded-full bg-yellow-500/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-yellow-100">
+                {t('audio_off_badge') || 'Audio off'}
+              </div>
+            ) : null}
+            {!hasVideoTrack || mutedVideo ? (
+              <div className="rounded-full bg-gray-500/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-gray-100">
+                {t('camera_off') || 'Camera off'}
+              </div>
+            ) : null}
+          </div>
+        }
+        topRightControls={
+          <ParticipantTileActions
+            t={t}
+            userId={userId}
+            activeFullscreenTileId={activeFullscreenTileId}
+            toggleFullscreen={toggleFullscreen}
+            hasPermission={hasPermission}
+            remoteRole={remoteRole}
+            handleUpdateRole={handleUpdateRole}
+            handleKickUser={handleKickUser}
+            handleMuteUser={handleMuteUser}
+            requestHighQuality={requestHighQuality}
+          />
+        }
+      >
+        {stream ? (
+          <div className="flex-1 bg-gray-950 flex items-center justify-center overflow-hidden relative">
+            <ZoomableVideoContainer>
+              <VideoPlayer stream={stream} />
+            </ZoomableVideoContainer>
+          </div>
+        ) : (
+          renderParticipantPlaceholder({ displayName, peerStatus, peerStats, mutedVideo })
+        )}
+      </VideoTile>
+    );
+  };
+
+  return (
+    <div
+      className={`w-full transition-all duration-300 ${
+        isChatOpen ? 'pr-0 md:pr-80' : ''
+      } ${
+        fullscreenTileId ? 'opacity-0 pointer-events-none' : ''
+      }`}
+    >
+      {focusModeActive ? (
+        <div className="flex h-full flex-col gap-4 xl:flex-row">
+          <div className="min-h-0 flex-1">
+            {renderTile(focusedTileId)}
+          </div>
+          <div className="flex w-full flex-row gap-4 overflow-x-auto xl:w-80 xl:flex-col xl:overflow-y-auto">
+            {secondaryTileIds.map((tileId) => (
+              <div key={tileId} className="min-w-[260px] flex-1 xl:min-w-0">
+                {renderTile(tileId)}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div
+          className={`grid gap-4 ${
+            remoteParticipantCount === 0
+              ? 'h-full grid-cols-1 max-w-5xl mx-auto'
+              : remoteParticipantCount === 1
+                ? 'h-full grid-cols-1 md:grid-cols-2 max-w-7xl mx-auto'
+                : 'h-full grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+          }`}
+        >
+          {orderedTileIds.map(renderTile)}
+        </div>
+      )}
+
+      {remoteParticipantCount === 0 && (
+        <div className="hidden md:flex bg-gray-900/30 border-2 border-dashed border-gray-800 rounded-2xl flex-col items-center justify-center text-gray-600 p-8">
+          <div className="w-16 h-16 rounded-full bg-gray-800/50 flex items-center justify-center mb-4">
+            <Users size={24} className="opacity-50" />
+          </div>
+          <p className="font-medium">{t('waiting_for_others')}</p>
+          <p className="text-sm mt-2 opacity-60">
+            {t('share_room_id_hint')} <span className="font-mono text-blue-400">{roomId}</span>
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VideoPlayer({ stream }) {
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      className="w-full h-full object-contain"
+    />
+  );
+}
+
+export default MeetingVideoGrid;

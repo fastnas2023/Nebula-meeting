@@ -1,12 +1,23 @@
-import { useState, useCallback, Suspense } from 'react';
+import { useState, useCallback, Suspense, lazy } from 'react';
 import { useTranslation } from 'react-i18next';
-import AgoraMeeting from './AgoraMeeting';
-import JitsiMeeting from './JitsiMeeting';
-import WebRTCMeeting from './WebRTCMeeting';
-import RoleManager from './RoleManager';
 import { ToastContainer } from './UI';
-import { Video, Zap, Cloud, Server, ArrowRight, User, Globe, Shield, ArrowUpRight, Menu, X, Orbit } from 'lucide-react';
-import WaveParticles from './components/WaveParticles';
+import { Video, Cloud, Server, ArrowRight, User, Globe, Shield, ArrowUpRight, Menu, X, Orbit } from 'lucide-react';
+
+const AgoraMeeting = lazy(() => import('./AgoraMeeting'));
+const WebRTCMeeting = lazy(() => import('./WebRTCMeeting'));
+const RoleManager = lazy(() => import('./RoleManager'));
+const WaveParticles = lazy(() => import('./components/WaveParticles'));
+
+function ScreenLoader() {
+  return (
+    <div className="min-h-screen bg-black text-white flex items-center justify-center">
+      <div className="flex flex-col items-center gap-3 text-center px-6">
+        <div className="w-10 h-10 rounded-2xl border border-white/10 bg-white/5 animate-pulse" />
+        <p className="text-sm text-gray-400">Loading meeting workspace...</p>
+      </div>
+    </div>
+  );
+}
 
 function App() {
   const { t, i18n } = useTranslation();
@@ -14,7 +25,7 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     // 如果刷新后 URL 有 roomId，默认进入 webrtc
     return params.get('roomId') ? 'webrtc' : 'home';
-  }); // 'home', 'webrtc', 'agora', 'jitsi'
+  }); // 'home', 'webrtc', 'agora'
   const [toasts, setToasts] = useState([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -41,33 +52,32 @@ function App() {
 
   if (mode === 'agora') {
     return (
+      <Suspense fallback={<ScreenLoader />}>
         <>
-            <AgoraMeeting onBack={() => setMode('home')} addToast={addToast} />
-            <ToastContainer toasts={toasts} removeToast={removeToast} />
+          <AgoraMeeting onBack={() => setMode('home')} addToast={addToast} />
+          <ToastContainer toasts={toasts} removeToast={removeToast} />
         </>
-    );
-  }
-
-  if (mode === 'jitsi') {
-    return (
-        <>
-            <JitsiMeeting onBack={() => setMode('home')} addToast={addToast} />
-            <ToastContainer toasts={toasts} removeToast={removeToast} />
-        </>
+      </Suspense>
     );
   }
 
   if (mode === 'webrtc') {
     return (
+      <Suspense fallback={<ScreenLoader />}>
         <>
-            <WebRTCMeeting onBack={() => setMode('home')} addToast={addToast} />
-            <ToastContainer toasts={toasts} removeToast={removeToast} />
+          <WebRTCMeeting onBack={() => setMode('home')} addToast={addToast} />
+          <ToastContainer toasts={toasts} removeToast={removeToast} />
         </>
+      </Suspense>
     );
   }
 
   if (mode === 'admin') {
-      return <RoleManager onBack={() => setMode('home')} />;
+    return (
+      <Suspense fallback={<ScreenLoader />}>
+        <RoleManager onBack={() => setMode('home')} />
+      </Suspense>
+    );
   }
 
   return (
@@ -171,30 +181,7 @@ function App() {
           </div>
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-7xl w-full z-10 px-4 md:px-0 mb-32">
-        {/* Jitsi Card - Highlighted as Best for Instant */}
-        <div 
-            className="group relative bg-gray-900/20 backdrop-blur-xl p-6 rounded-3xl border border-gray-800 hover:border-purple-500/50 transition-all duration-300 hover:shadow-2xl hover:shadow-purple-900/20 cursor-pointer flex flex-col gap-4 overflow-hidden" 
-            onClick={() => handleModeSelect('jitsi')}
-        >
-            <div className="absolute top-0 right-0 bg-gray-700 text-white text-[10px] font-bold px-3 py-1.5 rounded-bl-xl uppercase tracking-wider">DEMO</div>
-            <div className="w-10 h-10 rounded-2xl bg-purple-500/10 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
-                <Zap className="text-purple-400" size={20} />
-            </div>
-            <div>
-                <h2 className="text-xl font-bold text-white mb-2 group-hover:text-purple-300 transition-colors">{t('jitsi_card_title')}</h2>
-                <p className="text-gray-400 text-sm leading-relaxed">
-                    {t('jitsi_card_desc')}
-                </p>
-            </div>
-            <div className="mt-auto pt-4 flex items-center justify-between">
-                <span className="text-xs font-mono text-gray-500">{t('jitsi_card_footer')}</span>
-                <div className="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center group-hover:bg-purple-600 transition-colors">
-                    <ArrowRight size={14} className="text-white" />
-                </div>
-            </div>
-        </div>
-
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-7xl w-full z-10 px-4 md:px-0 mb-32">
         {/* Agora Card */}
         <div 
             className="group relative bg-gray-900/20 backdrop-blur-xl p-6 rounded-3xl border border-gray-800 hover:border-blue-500/50 transition-all duration-300 hover:shadow-2xl hover:shadow-blue-900/20 cursor-pointer flex flex-col gap-4" 

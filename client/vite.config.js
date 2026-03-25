@@ -12,6 +12,44 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), tailwindcss(), ...(useHttps ? [basicSsl()] : [])],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return;
+
+            if (id.includes('agora-rtc-sdk-ng/esm/AgoraRTC_N-production.esm-bundler.mjs')) return 'agora-sdk';
+            if (id.includes('/@agora-js/media/')) return 'agora-media';
+            if (id.includes('/@agora-js/shared/')) return 'agora-shared';
+            if (id.includes('/@agora-js/report/')) return 'agora-report';
+            if (id.includes('/webrtc-adapter/')) return 'agora-webrtc-adapter';
+            if (id.includes('/axios/')) return 'agora-http';
+            if (id.includes('/formdata-polyfill/')) return 'agora-formdata';
+
+            if (id.includes('/three/')) return 'three-core';
+            if (id.includes('/@react-three/fiber/')) return 'react-three-fiber';
+            if (id.includes('/@react-three/drei/')) return 'react-three-drei';
+            if (id.includes('/maath/')) return 'maath-vendor';
+
+            if (id.includes('react-i18next') || id.includes('/i18next')) {
+              return 'i18n-vendor';
+            }
+
+            if (id.includes('lucide-react')) {
+              return 'icons-vendor';
+            }
+
+            if (
+              id.includes('/react/')
+              || id.includes('/react-dom/')
+              || id.includes('scheduler')
+            ) {
+              return 'react-vendor';
+            }
+          },
+        },
+      },
+    },
     test: {
       environment: 'jsdom',
       setupFiles: ['./src/test/setup.ts'],
