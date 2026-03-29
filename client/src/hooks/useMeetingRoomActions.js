@@ -58,13 +58,18 @@ export default function useMeetingRoomActions({
     appendSystemMessage(t('kick_user_tooltip') || 'Participant removed', 'warning');
   };
 
-  const handleMuteUser = (targetUserId, kind) => {
+  const handleMuteUser = (targetUserId, kind, enabled = false) => {
     if (!hasPermission('canMuteOthers')) {
       addToast(t('permission_denied'), 'error');
       return;
     }
-    socket.emit('mute-user', { targetUserId, kind });
-    appendSystemMessage(t('mute_user_tooltip') || 'Participant muted', 'notice');
+    socket.emit('mute-user', { targetUserId, kind, enabled });
+    appendSystemMessage(
+      enabled
+        ? (t('restore_user_audio_tooltip') || 'Participant microphone restored')
+        : (t('mute_user_tooltip') || 'Participant muted'),
+      'notice',
+    );
   };
 
   const handleUpdateRole = (targetUserId, currentRole) => {

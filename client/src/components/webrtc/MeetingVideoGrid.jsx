@@ -483,6 +483,7 @@ function MeetingVideoGrid({
             handleKickUser={handleKickUser}
             handleMuteUser={handleMuteUser}
             requestHighQuality={requestHighQuality}
+            isAudioMuted={mutedAudio}
           />
         ) : null}
       >

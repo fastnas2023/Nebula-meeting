@@ -373,20 +373,32 @@ export default function useMeetingSocketListeners({
         appendSystemMessage(t('user_kicked_msg') || 'A participant was removed', 'notice');
       }
     };
-    const onUserMuted = ({ targetUserId, kind }) => {
+    const onUserMuted = ({ targetUserId, kind, enabled }) => {
       if (targetUserId !== socket.id) return;
+      const nextEnabled = typeof enabled === 'boolean' ? enabled : false;
       if (kind === 'audio') {
-        localStreamRef.current?.getAudioTracks().forEach((track) => { track.enabled = false; });
-        setIsAudioEnabled(false);
-        addToast(t('you_were_muted_audio'), 'warning');
-        appendSystemMessage(t('you_were_muted_audio') || 'Your microphone was muted by host', 'warning');
+        localStreamRef.current?.getAudioTracks().forEach((track) => { track.enabled = nextEnabled; });
+        audioStreamRef.current?.getAudioTracks().forEach((track) => { track.enabled = nextEnabled; });
+        setIsAudioEnabled(nextEnabled);
+        if (nextEnabled) {
+          addToast(t('you_were_unmuted_audio') || 'Your microphone was restored by host', 'info');
+          appendSystemMessage(t('you_were_unmuted_audio') || 'Your microphone was restored by host', 'notice');
+        } else {
+          addToast(t('you_were_muted_audio'), 'warning');
+          appendSystemMessage(t('you_were_muted_audio') || 'Your microphone was muted by host', 'warning');
+        }
         return;
       }
       if (kind === 'video') {
-        localStreamRef.current?.getVideoTracks().forEach((track) => { track.enabled = false; });
-        setIsVideoEnabled(false);
-        addToast(t('you_were_muted_video'), 'warning');
-        appendSystemMessage(t('you_were_muted_video') || 'Your camera was disabled by host', 'warning');
+        localStreamRef.current?.getVideoTracks().forEach((track) => { track.enabled = nextEnabled; });
+        setIsVideoEnabled(nextEnabled);
+        if (nextEnabled) {
+          addToast(t('you_were_unmuted_video') || 'Your camera was restored by host', 'info');
+          appendSystemMessage(t('you_were_unmuted_video') || 'Your camera was restored by host', 'notice');
+        } else {
+          addToast(t('you_were_muted_video'), 'warning');
+          appendSystemMessage(t('you_were_muted_video') || 'Your camera was disabled by host', 'warning');
+        }
       }
     };
     const onRoomUsers = (users) => {

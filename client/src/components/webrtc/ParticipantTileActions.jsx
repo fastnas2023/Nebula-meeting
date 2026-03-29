@@ -1,4 +1,4 @@
-import { ArrowUpCircle, Maximize2, Minimize2, MoreVertical, Shield, UserX, VolumeX } from 'lucide-react';
+import { ArrowUpCircle, Maximize2, Minimize2, MoreVertical, Shield, UserX, Volume2, VolumeX } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 function ParticipantTileActions({
@@ -12,6 +12,7 @@ function ParticipantTileActions({
   handleKickUser,
   handleMuteUser,
   requestHighQuality,
+  isAudioMuted = false,
 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -73,13 +74,17 @@ function ParticipantTileActions({
               {canMute && (
                 <button
                   onClick={() => {
-                    handleMuteUser(userId, 'audio');
+                    handleMuteUser(userId, 'audio', isAudioMuted);
                     setIsMenuOpen(false);
                   }}
                   className="w-full px-3 py-2.5 text-left text-sm text-white hover:bg-gray-800 transition-colors flex items-center gap-2"
                 >
-                  <VolumeX size={14} className="text-yellow-400" />
-                  {t('mute_user_tooltip')}
+                  {isAudioMuted ? (
+                    <Volume2 size={14} className="text-emerald-400" />
+                  ) : (
+                    <VolumeX size={14} className="text-yellow-400" />
+                  )}
+                  {isAudioMuted ? (t('restore_user_audio_tooltip') || 'Restore Audio') : t('mute_user_tooltip')}
                 </button>
               )}
               {canManage && (

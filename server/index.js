@@ -501,8 +501,8 @@ io.on('connection', (socket) => {
     console.log(`[Role] user-kicked emitted to room ${roomId}`);
   });
 
-  socket.on('mute-user', ({ targetUserId, kind }) => { // kind: 'audio' | 'video'
-    console.log(`[Role] mute-user request from ${socket.id} for ${targetUserId} (${kind})`);
+  socket.on('mute-user', ({ targetUserId, kind, enabled }) => { // kind: 'audio' | 'video'
+    console.log(`[Role] mute-user request from ${socket.id} for ${targetUserId} (${kind}) enabled=${enabled}`);
     const { roomId, userId, participantId } = socket.userData || {};
     if (!roomId || !userId || !participantId) {
         console.log(`[Role] mute-user failed: missing userData`, socket.userData);
@@ -518,9 +518,11 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Broadcast mute event (target client will disable track)
-    io.to(roomId).emit('user-muted', { targetUserId, kind });
-    console.log(`[Role] user-muted emitted to room ${roomId}`);
+    const nextEnabled = typeof enabled === 'boolean' ? enabled : false;
+
+    // Broadcast media-control event (target client will enable/disable track)
+    io.to(roomId).emit('user-muted', { targetUserId, kind, enabled: nextEnabled });
+    console.log(`[Role] user-muted emitted to room ${roomId} enabled=${nextEnabled}`);
   });
 
   // Chat Messaging
