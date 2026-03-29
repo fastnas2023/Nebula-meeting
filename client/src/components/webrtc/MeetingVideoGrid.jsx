@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import ZoomableVideoContainer from '../ZoomableVideoContainer';
 import VideoTile from '../VideoTile';
 import ParticipantTileActions from './ParticipantTileActions';
+import { detectMobileEdgeBrowser, detectTouchCapableDevice } from '../../utils/browserSupport';
 
 function configureInlineVideoPlayback(video, { muted = false } = {}) {
   if (!video) return;
@@ -28,20 +29,8 @@ async function requestVideoPlayback(video) {
   } catch {}
 }
 
-function detectTouchCapableDevice() {
-  if (typeof window === 'undefined') return false;
-
-  const coarsePointer = typeof window.matchMedia === 'function'
-    ? window.matchMedia('(pointer: coarse)').matches
-    : false;
-  const touchPoints = typeof navigator !== 'undefined' ? navigator.maxTouchPoints || 0 : 0;
-  return coarsePointer || touchPoints > 0;
-}
-
 function shouldPreferCanvasFallback() {
-  if (typeof navigator === 'undefined') return false;
-  const ua = navigator.userAgent || '';
-  return /EdgA|EdgiOS/i.test(ua) && detectTouchCapableDevice();
+  return detectMobileEdgeBrowser();
 }
 
 function StreamVideo({ stream, className, muted = false, externalRef = null }) {
@@ -238,11 +227,20 @@ function MeetingVideoGrid({
   requestHighQuality,
   roomId,
 }) {
+  const [isMobileEdge, setIsMobileEdge] = useState(false);
+
+  useEffect(() => {
+    setIsMobileEdge(detectMobileEdgeBrowser());
+  }, []);
+
   const participantTileIds = orderedTileIds.filter((id) => id !== 'local');
   const remoteStreamCount = Object.keys(remoteStreams).length;
   const remoteParticipantCount = participantTileIds.length;
-  const focusModeActive = !!focusedTileId && orderedTileIds.includes(focusedTileId);
-  const secondaryTileIds = focusModeActive ? orderedTileIds.filter((id) => id !== focusedTileId) : [];
+  const shouldHideLocalTile = isMobileEdge && remoteParticipantCount > 0;
+  const displayedTileIds = shouldHideLocalTile ? participantTileIds : orderedTileIds;
+  const edgeCompactMode = isMobileEdge && remoteParticipantCount > 0;
+  const focusModeActive = !!focusedTileId && displayedTileIds.includes(focusedTileId);
+  const secondaryTileIds = focusModeActive ? displayedTileIds.filter((id) => id !== focusedTileId) : [];
 
   const qualityBadge = (stats) => {
     if (!stats?.quality) return null;
@@ -321,6 +319,7 @@ function MeetingVideoGrid({
               : 'grid'
           }
           controlsAlwaysVisible={activeFullscreenTileId === 'local'}
+          compactMobile={edgeCompactMode}
           portalTarget={fullscreenHostRef.current}
           title={t('you')}
           topLeftExtra={
@@ -335,16 +334,18 @@ function MeetingVideoGrid({
           }
           topRightControls={
             <>
-              <button
-                onClick={() => setIsMirrored(!isMirrored)}
-                className="p-2 bg-black/40 hover:bg-black/60 backdrop-blur-md text-white rounded-lg border border-white/10"
-                title={t('toggle_mirror') || 'Toggle Mirror'}
-              >
-                <FlipHorizontal size={16} className={isMirrored ? 'text-blue-400' : 'text-white'} />
-              </button>
+              {!edgeCompactMode ? (
+                <button
+                  onClick={() => setIsMirrored(!isMirrored)}
+                  className="p-2 bg-black/40 hover:bg-black/60 backdrop-blur-md text-white rounded-lg border border-white/10"
+                  title={t('toggle_mirror') || 'Toggle Mirror'}
+                >
+                  <FlipHorizontal size={16} className={isMirrored ? 'text-blue-400' : 'text-white'} />
+                </button>
+              ) : null}
               <button
                 onClick={() => toggleFullscreen('local')}
-                className="p-2 bg-black/40 hover:bg-black/60 backdrop-blur-md text-white rounded-lg border border-white/10"
+                className="p-2 bg-black/50 hover:bg-black/70 text-white rounded-lg border border-white/10"
                 title={activeFullscreenTileId === 'local' ? (t('restore_video') || 'Restore') : (t('fullscreen_video') || 'Fullscreen')}
               >
                 {activeFullscreenTileId === 'local' ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
@@ -396,19 +397,20 @@ function MeetingVideoGrid({
     if (!stream && !participantMeta[userId] && !peerStatus) return null;
 
     return (
-      <VideoTile
-        key={userId}
-        tileId={userId}
+        <VideoTile
+          key={userId}
+          tileId={userId}
         mode={
           activeFullscreenTileId === userId
             ? (fullscreenTileId === userId ? 'fullscreen' : 'exiting')
             : 'grid'
         }
-        controlsAlwaysVisible={activeFullscreenTileId === userId}
-        portalTarget={fullscreenHostRef.current}
-        title={displayName}
-        topLeftExtra={
-          <div className="flex items-center gap-2">
+          controlsAlwaysVisible={activeFullscreenTileId === userId}
+          compactMobile={edgeCompactMode}
+          portalTarget={fullscreenHostRef.current}
+          title={displayName}
+          topLeftExtra={
+          <div className={`flex items-center ${edgeCompactMode ? 'gap-1' : 'gap-2'}`}>
             {remoteRole ? (
               <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold ${
                 remoteRole === 'admin' ? 'bg-purple-500/80 text-white' :
@@ -426,7 +428,7 @@ function MeetingVideoGrid({
                 {peerStatus}
               </div>
             ) : null}
-            {quality ? (
+            {!edgeCompactMode && quality ? (
               <div
                 className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${quality.className}`}
                 title={[
@@ -439,19 +441,19 @@ function MeetingVideoGrid({
                 {quality.label}
               </div>
             ) : null}
-            {peerStats?.rttMs >= 500 ? (
+            {!edgeCompactMode && peerStats?.rttMs >= 500 ? (
               <div className="flex items-center gap-1 rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-100">
                 <Clock3 size={11} />
                 {peerStats.rttMs}ms
               </div>
             ) : null}
-            {typeof peerStats?.packetLossPct === 'number' && peerStats.packetLossPct >= 3 ? (
+            {!edgeCompactMode && typeof peerStats?.packetLossPct === 'number' && peerStats.packetLossPct >= 3 ? (
               <div className="flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-100">
                 <Activity size={11} />
                 {peerStats.packetLossPct}% loss
               </div>
             ) : null}
-            {peerStats?.frozen ? (
+            {!edgeCompactMode && peerStats?.frozen ? (
               <div className="flex items-center gap-1 rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-100">
                 <VideoOff size={11} />
                 {t('video_frozen_badge') || 'Frozen'}
@@ -469,7 +471,7 @@ function MeetingVideoGrid({
             ) : null}
           </div>
         }
-        topRightControls={
+        topRightControls={!edgeCompactMode ? (
           <ParticipantTileActions
             t={t}
             userId={userId}
@@ -482,13 +484,19 @@ function MeetingVideoGrid({
             handleMuteUser={handleMuteUser}
             requestHighQuality={requestHighQuality}
           />
-        }
+        ) : null}
       >
         {stream ? (
           <div className="flex-1 bg-gray-950 flex items-center justify-center overflow-hidden relative">
-            <ZoomableVideoContainer>
-              <VideoPlayer stream={stream} />
-            </ZoomableVideoContainer>
+            {edgeCompactMode ? (
+              <div className="h-full w-full flex items-center justify-center">
+                <VideoPlayer stream={stream} />
+              </div>
+            ) : (
+              <ZoomableVideoContainer>
+                <VideoPlayer stream={stream} />
+              </ZoomableVideoContainer>
+            )}
           </div>
         ) : (
           renderParticipantPlaceholder({ displayName, peerStatus, peerStats, mutedVideo })
@@ -505,6 +513,17 @@ function MeetingVideoGrid({
         fullscreenTileId ? 'opacity-0 pointer-events-none' : ''
       }`}
     >
+      {isMobileEdge ? (
+        <div className="mx-auto mb-3 w-full max-w-5xl rounded-2xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-50">
+          <div className="font-semibold">
+            {t('edge_mobile_browser_warning_title') || 'Edge on Android may black-screen in multi-person meetings'}
+          </div>
+          <div className="text-amber-100/90">
+            {t('edge_mobile_meeting_notice') || 'We are using a simplified view here. For the best stability, open this room in your phone browser, Chrome, or WeChat.'}
+          </div>
+        </div>
+      ) : null}
+
       {focusModeActive ? (
         <div className="flex h-full flex-col gap-4 xl:flex-row">
           <div className="min-h-0 flex-1">
@@ -523,12 +542,14 @@ function MeetingVideoGrid({
           className={`grid gap-4 ${
             remoteParticipantCount === 0
               ? 'h-full grid-cols-1 max-w-5xl mx-auto'
-              : remoteParticipantCount === 1
+              : edgeCompactMode
+                ? 'h-full grid-cols-1 max-w-5xl mx-auto'
+                : remoteParticipantCount === 1
                 ? 'h-full grid-cols-1 md:grid-cols-2 max-w-7xl mx-auto'
                 : 'h-full grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
           }`}
         >
-          {orderedTileIds.map(renderTile)}
+          {displayedTileIds.map(renderTile)}
         </div>
       )}
 

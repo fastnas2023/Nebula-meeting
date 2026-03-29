@@ -1,4 +1,5 @@
 import { Lock, Mic, MicOff, SignalLow, Users, Video as VideoIcon } from 'lucide-react';
+import { detectMobileEdgeBrowser } from '../../utils/browserSupport';
 
 function SetupScreen({
   t,
@@ -30,6 +31,8 @@ function SetupScreen({
   setUiState,
   isAudioEnabled,
 }) {
+  const isMobileEdge = detectMobileEdgeBrowser();
+
   return (
     <div className="h-screen bg-gray-950 flex items-center justify-center p-4">
       <div className="bg-gray-900 p-8 rounded-2xl shadow-2xl w-full max-w-4xl border border-gray-800 flex flex-col md:flex-row gap-8">
@@ -95,6 +98,15 @@ function SetupScreen({
           {meetingPhase === 'joining' && (
             <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm text-blue-100">
               {t('joining_room_status') || 'Joining room and preparing your devices...'}
+            </div>
+          )}
+
+          {isMobileEdge && (
+            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-50 space-y-2">
+              <div className="font-semibold">{t('edge_mobile_browser_warning_title') || 'Edge on Android may black-screen in multi-person meetings'}</div>
+              <p className="text-amber-100/90">
+                {t('edge_mobile_browser_warning_desc') || 'For the most stable experience, open this meeting in your phone browser, Chrome, or WeChat.'}
+              </p>
             </div>
           )}
 

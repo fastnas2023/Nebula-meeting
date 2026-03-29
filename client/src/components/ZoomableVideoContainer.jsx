@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { detectTouchCapableDevice } from '../utils/browserSupport';
 
 const ZoomableVideoContainer = ({ children, initialZoom = 1, minZoom = 0.5, maxZoom = 3.0, step = 0.1 }) => {
   const [zoom, setZoom] = useState(initialZoom);
@@ -73,9 +74,7 @@ const ZoomableVideoContainer = ({ children, initialZoom = 1, minZoom = 0.5, maxZ
       : null;
 
     const updateTouchMode = () => {
-      const coarsePointer = !!mediaQuery?.matches;
-      const touchPoints = typeof navigator !== 'undefined' ? navigator.maxTouchPoints || 0 : 0;
-      const nextIsTouch = coarsePointer || touchPoints > 0;
+      const nextIsTouch = detectTouchCapableDevice();
       setIsTouchDevice(nextIsTouch);
       if (nextIsTouch) {
         setZoom(1);
