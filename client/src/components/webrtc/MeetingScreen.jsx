@@ -1,7 +1,9 @@
 import { AlertTriangle, Check, Copy, Crown, Loader2, Shield, UserX, Users, Wifi, WifiOff } from 'lucide-react';
+import { NoticeBar } from 'antd-mobile';
 import MeetingChatPanel from './MeetingChatPanel';
 import MeetingOverlays from './MeetingOverlays';
 import MeetingToolbar from './MeetingToolbar';
+import { detectMobileEdgeBrowser, detectTouchCapableDevice } from '../../utils/browserSupport';
 
 function MeetingScreen({
   t,
@@ -63,6 +65,9 @@ function MeetingScreen({
   leaveAndTransferHost,
   closeRoomForEveryone,
 }) {
+  const isTouchDevice = detectTouchCapableDevice();
+  const isMobileEdge = detectMobileEdgeBrowser();
+
   return (
     <div className="h-screen bg-gray-950 flex flex-col overflow-hidden relative">
       <div ref={fullscreenHostRef} className={`absolute inset-0 z-[70] ${activeFullscreenTileId ? 'pointer-events-auto' : 'pointer-events-none'}`} />
@@ -164,6 +169,18 @@ function MeetingScreen({
             {meetingPhase === 'kicked' && (t('you_were_kicked') || 'You were removed from the room')}
             {meetingPhase === 'room-closed' && (t('room_closed') || 'Room closed')}
           </div>
+        </div>
+      )}
+
+      {isTouchDevice && !activeFullscreenTileId && (
+        <div className="px-2 pt-2 md:hidden z-10">
+          <NoticeBar
+            color={isMobileEdge ? 'alert' : 'info'}
+            className="rounded-2xl border border-white/10 [&_.adm-notice-bar-content-inner]:text-xs [&_.adm-notice-bar-content-inner]:leading-5"
+            content={isMobileEdge
+              ? `${t('edge_mobile_browser_warning_title') || 'Edge on Android may black-screen in multi-person meetings'} ${t('edge_mobile_browser_warning_desc') || 'For the most stable experience, open this meeting in your phone browser, Chrome, or WeChat.'}`
+              : (t('mobile_compact_layout_notice') || 'Mobile compact layout is enabled for a lighter meeting view.')}
+          />
         </div>
       )}
 

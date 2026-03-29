@@ -210,6 +210,7 @@
   "edge_mobile_meeting_notice": "当前已切换为简化显示模式。若仍不稳定，建议改用手机默认浏览器、Chrome 或微信内打开。",
   "edge_local_video_notice_title": "当前已隐藏本地视频预览",
   "edge_local_video_notice_desc": "安卓 Edge 在多人会议中可能无法稳定渲染你的本地画面。会议仍可继续，其他参会者不受影响。",
+  "mobile_compact_layout_notice": "当前已启用移动端轻量布局，以降低浏览器渲染压力。",
   "network_quality_good": "良好",
   "network_quality_fair": "一般",
   "network_quality_poor": "较差",

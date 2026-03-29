@@ -1,5 +1,6 @@
 import { ArrowUpDown, ChevronUp, MessageSquare, Mic, MicOff, Monitor, MonitorOff, PhoneOff, SignalLow, StopCircle, Video as VideoIcon } from 'lucide-react';
 import { useState } from 'react';
+import { SafeArea } from 'antd-mobile';
 
 function MeetingToolbar({
   t,
@@ -144,63 +145,66 @@ function MeetingToolbar({
     <div
       className={`bg-gray-900/95 border-t border-gray-800 flex items-center justify-center px-2 md:px-4 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] md:pb-4 transition-opacity duration-200 ${activeFullscreenTileId ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
     >
-      <div className="flex items-center gap-2 md:gap-3 bg-gray-800/80 backdrop-blur-lg px-2.5 md:px-6 py-2.5 md:py-3 rounded-2xl border border-gray-700 shadow-2xl md:transform md:-translate-y-2 max-w-full overflow-x-auto">
-        <button
-          onClick={toggleAudio}
-          className={`${primaryButtonClass} ${
-            isAudioEnabled ? 'bg-gray-700/50 hover:bg-gray-600 text-white' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500'
-          }`}
-          title={isAudioEnabled ? t('mute_mic_tooltip') : t('unmute_mic_tooltip')}
-        >
-          {isAudioEnabled ? <Mic size={18} className="md:h-5 md:w-5" /> : <MicOff size={18} className="md:h-5 md:w-5" />}
-          <span className="text-[10px] font-medium">{isAudioEnabled ? t('mute_btn') : t('unmute_btn')}</span>
-        </button>
-
-        <button
-          onClick={toggleVideo}
-          className={`${primaryButtonClass} ${
-            isVideoEnabled ? 'bg-gray-700/50 hover:bg-gray-600 text-white' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500'
-          }`}
-          title={isVideoEnabled ? t('stop_video_tooltip') : t('start_video_tooltip')}
-        >
-          {isVideoEnabled ? <VideoIcon size={18} className="md:h-5 md:w-5" /> : <VideoIcon size={18} className="text-red-500 md:h-5 md:w-5" />}
-          <span className="text-[10px] font-medium">{isVideoEnabled ? t('stop_video_btn') : t('start_video_btn')}</span>
-        </button>
-
-        <div className="hidden md:flex items-center gap-3">
-          {commonSecondaryControls}
-          {sortControl}
-        </div>
-
-        <div className="md:hidden relative">
+      <div className="flex flex-col items-center">
+        <div className="flex items-center gap-2 md:gap-3 bg-gray-800/80 backdrop-blur-lg px-2.5 md:px-6 py-2.5 md:py-3 rounded-2xl border border-gray-700 shadow-2xl md:transform md:-translate-y-2 max-w-full overflow-x-auto">
           <button
-            onClick={() => setIsMoreOpen((prev) => !prev)}
-            className={`${primaryButtonClass} bg-gray-700/50 hover:bg-gray-600 text-white`}
-            title={t('more_controls') || 'More'}
+            onClick={toggleAudio}
+            className={`${primaryButtonClass} ${
+              isAudioEnabled ? 'bg-gray-700/50 hover:bg-gray-600 text-white' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500'
+            }`}
+            title={isAudioEnabled ? t('mute_mic_tooltip') : t('unmute_mic_tooltip')}
           >
-            <ChevronUp size={18} className={`transition-transform md:h-5 md:w-5 ${isMoreOpen ? 'rotate-180' : ''}`} />
-            <span className="text-[10px] font-medium">{t('more_controls') || 'More'}</span>
+            {isAudioEnabled ? <Mic size={18} className="md:h-5 md:w-5" /> : <MicOff size={18} className="md:h-5 md:w-5" />}
+            <span className="text-[10px] font-medium">{isAudioEnabled ? t('mute_btn') : t('unmute_btn')}</span>
           </button>
 
-          {isMoreOpen && (
-            <div className="absolute bottom-full mb-2 right-0 w-[232px] rounded-2xl border border-gray-700 bg-gray-900/95 p-2.5 shadow-2xl">
-              <div className="grid grid-cols-3 gap-2">
-                {commonSecondaryControls}
+          <button
+            onClick={toggleVideo}
+            className={`${primaryButtonClass} ${
+              isVideoEnabled ? 'bg-gray-700/50 hover:bg-gray-600 text-white' : 'bg-red-500/10 hover:bg-red-500/20 text-red-500'
+            }`}
+            title={isVideoEnabled ? t('stop_video_tooltip') : t('start_video_tooltip')}
+          >
+            {isVideoEnabled ? <VideoIcon size={18} className="md:h-5 md:w-5" /> : <VideoIcon size={18} className="text-red-500 md:h-5 md:w-5" />}
+            <span className="text-[10px] font-medium">{isVideoEnabled ? t('stop_video_btn') : t('start_video_btn')}</span>
+          </button>
+
+          <div className="hidden md:flex items-center gap-3">
+            {commonSecondaryControls}
+            {sortControl}
+          </div>
+
+          <div className="md:hidden relative">
+            <button
+              onClick={() => setIsMoreOpen((prev) => !prev)}
+              className={`${primaryButtonClass} bg-gray-700/50 hover:bg-gray-600 text-white`}
+              title={t('more_controls') || 'More'}
+            >
+              <ChevronUp size={18} className={`transition-transform md:h-5 md:w-5 ${isMoreOpen ? 'rotate-180' : ''}`} />
+              <span className="text-[10px] font-medium">{t('more_controls') || 'More'}</span>
+            </button>
+
+            {isMoreOpen && (
+              <div className="absolute bottom-full mb-2 right-0 w-[232px] rounded-2xl border border-gray-700 bg-gray-900/95 p-2.5 shadow-2xl">
+                <div className="grid grid-cols-3 gap-2">
+                  {commonSecondaryControls}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
+
+          <div className="w-px h-8 bg-gray-700 mx-1 md:mx-2"></div>
+
+          <button
+            onClick={exitToHome}
+            className={`${primaryButtonClass} bg-red-600 hover:bg-red-700 text-white shadow-lg shadow-red-900/20`}
+            title={t('leave_meeting_tooltip')}
+          >
+            <PhoneOff size={18} className="md:h-5 md:w-5" />
+            <span className="text-[10px] font-medium">{t('leave_btn')}</span>
+          </button>
         </div>
-
-        <div className="w-px h-8 bg-gray-700 mx-1 md:mx-2"></div>
-
-        <button
-          onClick={exitToHome}
-          className={`${primaryButtonClass} bg-red-600 hover:bg-red-700 text-white shadow-lg shadow-red-900/20`}
-          title={t('leave_meeting_tooltip')}
-        >
-          <PhoneOff size={18} className="md:h-5 md:w-5" />
-          <span className="text-[10px] font-medium">{t('leave_btn')}</span>
-        </button>
+        <SafeArea position="bottom" />
       </div>
     </div>
   );

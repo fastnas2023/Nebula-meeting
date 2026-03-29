@@ -1,4 +1,5 @@
 import { Lock, Mic, MicOff, SignalLow, Users, Video as VideoIcon } from 'lucide-react';
+import { NoticeBar } from 'antd-mobile';
 import { detectMobileEdgeBrowser } from '../../utils/browserSupport';
 
 function SetupScreen({
@@ -102,12 +103,11 @@ function SetupScreen({
           )}
 
           {isMobileEdge && (
-            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-50 space-y-2">
-              <div className="font-semibold">{t('edge_mobile_browser_warning_title') || 'Edge on Android may black-screen in multi-person meetings'}</div>
-              <p className="text-amber-100/90">
-                {t('edge_mobile_browser_warning_desc') || 'For the most stable experience, open this meeting in your phone browser, Chrome, or WeChat.'}
-              </p>
-            </div>
+            <NoticeBar
+              color="alert"
+              className="rounded-2xl border border-amber-500/20 [&_.adm-notice-bar-content-inner]:text-sm [&_.adm-notice-bar-content-inner]:leading-5"
+              content={`${t('edge_mobile_browser_warning_title') || 'Edge on Android may black-screen in multi-person meetings'} ${t('edge_mobile_browser_warning_desc') || 'For the most stable experience, open this meeting in your phone browser, Chrome, or WeChat.'}`}
+            />
           )}
 
           {deviceSetupIssue && (
