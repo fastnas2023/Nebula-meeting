@@ -15,6 +15,57 @@ const app = express();
 app.use(cors());
 app.use(express.json()); // Enable JSON body parsing
 
+const defaultRtcIceServers = [
+  {
+    urls: [
+      'stun:stun.l.google.com:19302',
+      'stun:stun1.l.google.com:19302',
+      'stun:stun.qq.com:3478',
+      'stun:stun.aliyun.com:3478',
+      'stun:stun.miwifi.com:3478',
+    ],
+  },
+];
+
+function splitEnvList(value) {
+  if (!value) return [];
+  return String(value)
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function resolveRtcIceServers() {
+  if (process.env.RTC_ICE_SERVERS_JSON) {
+    try {
+      const parsed = JSON.parse(process.env.RTC_ICE_SERVERS_JSON);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    } catch (error) {
+      console.error('Failed to parse RTC_ICE_SERVERS_JSON:', error);
+    }
+  }
+
+  const stunUrls = splitEnvList(process.env.STUN_URLS);
+  const turnUrls = splitEnvList(process.env.TURN_URLS || process.env.TURN_URL);
+  const iceServers = [];
+
+  iceServers.push({
+    urls: stunUrls.length > 0 ? stunUrls : defaultRtcIceServers[0].urls,
+  });
+
+  if (turnUrls.length > 0 && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
+    iceServers.push({
+      urls: turnUrls,
+      username: process.env.TURN_USERNAME,
+      credential: process.env.TURN_CREDENTIAL,
+    });
+  }
+
+  return iceServers;
+}
+
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, 'public')));
@@ -78,6 +129,12 @@ app.get('/api/rooms', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/api/rtc-config', (req, res) => {
+  res.json({
+    iceServers: resolveRtcIceServers(),
+  });
 });
 
 // ---------------------------
@@ -154,7 +211,9 @@ const io = new Server(server, {
     origin: '*', // In production, replace with your client URL
     methods: ['GET', 'POST']
   },
-  maxHttpBufferSize: 1e8 // 100 MB
+  maxHttpBufferSize: 1e8, // 100 MB
+  pingInterval: Number(process.env.SOCKET_PING_INTERVAL_MS) || 25000,
+  pingTimeout: Number(process.env.SOCKET_PING_TIMEOUT_MS) || 60000,
 });
 
 // Store room state if needed, but for now we rely on socket.io rooms
@@ -565,14 +624,14 @@ io.on('connection', (socket) => {
     io.to(payload.target).emit('ice-candidate', payload);
   });
 
-  socket.on('disconnect', async () => {
+  socket.on('disconnect', async (reason) => {
     const { roomId, userId, participantId } = socket.userData || {};
 
     if (roomId && userId && participantId) {
-      console.log(`User ${userId} disconnected from room ${roomId}`);
+      console.log(`User ${userId} disconnected from room ${roomId} (${reason})`);
       scheduleReconnectCleanup(socket);
     } else {
-      console.log('User disconnected (not in room):', socket.id);
+      console.log(`User disconnected (not in room): ${socket.id} (${reason})`);
     }
   });
 });

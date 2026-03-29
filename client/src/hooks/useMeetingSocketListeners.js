@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
-const stunServers = {
+export const defaultRtcConfiguration = {
   iceServers: [
     {
       urls: [
@@ -54,7 +54,17 @@ export default function useMeetingSocketListeners({
   onForcedExit,
   onSocketReconnected,
   handleRoomSession,
+  rtcConfiguration,
 }) {
+  const rtcConfigurationRef = useRef(defaultRtcConfiguration);
+
+  useEffect(() => {
+    const nextConfig = rtcConfiguration?.iceServers?.length
+      ? rtcConfiguration
+      : defaultRtcConfiguration;
+    rtcConfigurationRef.current = nextConfig;
+  }, [rtcConfiguration]);
+
   const appendSystemMessage = (content, tone = 'system') => {
     setMessages((prev) => [...prev, createSystemMessage(content, tone)]);
   };
@@ -194,7 +204,7 @@ export default function useMeetingSocketListeners({
       clearPeerStats(targetId, peersRef.current[targetId]);
     }
 
-    const pc = new RTCPeerConnection(stunServers);
+    const pc = new RTCPeerConnection(rtcConfigurationRef.current);
     peersRef.current[targetId] = pc;
     setParticipantConnectionStatus((prev) => ({ ...prev, [targetId]: 'connecting' }));
     schedulePeerStats(targetId, pc);

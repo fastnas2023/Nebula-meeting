@@ -7,7 +7,7 @@ import SetupScreen from './components/webrtc/SetupScreen';
 import WelcomeScreen from './components/webrtc/WelcomeScreen';
 import useMeetingMedia from './hooks/useMeetingMedia';
 import useMeetingRoomActions from './hooks/useMeetingRoomActions';
-import useMeetingSocketListeners from './hooks/useMeetingSocketListeners';
+import useMeetingSocketListeners, { defaultRtcConfiguration } from './hooks/useMeetingSocketListeners';
 import { loadFullscreenTileId, loadSortRule, saveFullscreenTileId, saveSortRule, sortParticipantIds } from './utils/meetingState';
 import { createInitialUiState, reduceUi } from './utils/webrtcUiMachine';
 import { formatRecordingStats } from './utils/meetingRecording';
@@ -17,7 +17,14 @@ import { getWithTtl, remove, setWithTtl } from './utils/ttlStorage';
 import { getOrCreateClientId } from './utils/clientId';
 
 // Use relative path for socket.io to leverage Vite proxy in dev and same-origin in prod
-const socket = io();
+const socket = io({
+  transports: ['websocket', 'polling'],
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  timeout: 20000,
+});
 
 function WebRTCMeeting({ onBack, addToast, username }) {
   const { t } = useTranslation();
@@ -57,6 +64,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
   const [participantConnectionStatus, setParticipantConnectionStatus] = useState({});
   const [participantStats, setParticipantStats] = useState({});
   const [deviceSetupIssue, setDeviceSetupIssue] = useState(null);
+  const [rtcConfiguration, setRtcConfiguration] = useState(defaultRtcConfiguration);
 
   // Device Setup State
   const [cameras, setCameras] = useState([]);
@@ -556,6 +564,25 @@ function WebRTCMeeting({ onBack, addToast, username }) {
       .catch((error) => console.error('Failed to load roles:', error));
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch('/api/rtc-config')
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (!Array.isArray(data?.iceServers) || data.iceServers.length === 0) return;
+        setRtcConfiguration({ iceServers: data.iceServers });
+      })
+      .catch((error) => {
+        console.warn('Failed to load RTC config, falling back to default STUN servers.', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const {
     setLowDataModeEnabled,
     prepareJoinMedia,
@@ -707,6 +734,7 @@ function WebRTCMeeting({ onBack, addToast, username }) {
     dispatchLifecycle,
     onForcedExit: () => exitToHome(),
     onSocketReconnected: rejoinCurrentRoom,
+    rtcConfiguration,
     handleRoomSession: ({ token }) => {
       if (!token || !roomId) return;
       setRoomSessionToken(token);
