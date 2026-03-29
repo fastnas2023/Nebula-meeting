@@ -236,8 +236,8 @@ function MeetingVideoGrid({
   const participantTileIds = orderedTileIds.filter((id) => id !== 'local');
   const remoteStreamCount = Object.keys(remoteStreams).length;
   const remoteParticipantCount = participantTileIds.length;
-  const shouldHideLocalTile = isMobileEdge && remoteParticipantCount > 0;
-  const displayedTileIds = shouldHideLocalTile ? participantTileIds : orderedTileIds;
+  const showEdgeLocalNoticeTile = isMobileEdge && remoteParticipantCount > 0;
+  const displayedTileIds = orderedTileIds;
   const edgeCompactMode = isMobileEdge && remoteParticipantCount > 0;
   const focusModeActive = !!focusedTileId && displayedTileIds.includes(focusedTileId);
   const secondaryTileIds = focusModeActive ? displayedTileIds.filter((id) => id !== focusedTileId) : [];
@@ -353,16 +353,35 @@ function MeetingVideoGrid({
             </>
           }
         >
-          <ZoomableVideoContainer>
-            <StreamVideo
-              stream={localStreamRef.current}
-              externalRef={localVideoRef}
-              muted
-              className={`w-full h-full object-contain ${shouldFlipLocalVideoCss ? 'transform scale-x-[-1]' : ''} ${!isSharing && !isVideoEnabled ? 'hidden' : ''}`}
-            />
-          </ZoomableVideoContainer>
+          {showEdgeLocalNoticeTile ? (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-[radial-gradient(circle_at_top,rgba(245,158,11,0.15),transparent_38%),rgba(2,6,23,0.92)] px-6 text-center">
+              <div className="flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br from-amber-500/30 to-slate-900 text-3xl font-bold text-white shadow-lg">
+                {t('me_placeholder')}
+              </div>
+              <div className="space-y-2">
+                <div className="text-sm font-semibold text-white">
+                  {t('edge_local_video_notice_title') || 'Local video is hidden in Edge'}
+                </div>
+                <p className="text-xs leading-5 text-amber-100/85">
+                  {t('edge_local_video_notice_desc') || 'Edge on Android may not render your local video reliably in multi-person meetings. Others can still continue in the room.'}
+                </p>
+                <p className="text-xs text-gray-400">
+                  {t('edge_mobile_browser_warning_desc') || 'For the most stable experience, open this meeting in your phone browser, Chrome, or WeChat.'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <ZoomableVideoContainer>
+              <StreamVideo
+                stream={localStreamRef.current}
+                externalRef={localVideoRef}
+                muted
+                className={`w-full h-full object-contain ${shouldFlipLocalVideoCss ? 'transform scale-x-[-1]' : ''} ${!isSharing && !isVideoEnabled ? 'hidden' : ''}`}
+              />
+            </ZoomableVideoContainer>
+          )}
 
-          {(!isSharing && (!localStreamRef.current || localStreamRef.current.getVideoTracks().length === 0 || !isVideoEnabled)) && (
+          {!showEdgeLocalNoticeTile && (!isSharing && (!localStreamRef.current || localStreamRef.current.getVideoTracks().length === 0 || !isVideoEnabled)) && (
             <div className="flex flex-col items-center justify-center">
               <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-blue-600 to-purple-600 flex items-center justify-center text-3xl font-bold text-white shadow-lg mb-4">
                 {t('me_placeholder')}

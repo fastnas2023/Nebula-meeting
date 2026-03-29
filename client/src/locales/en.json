@@ -220,6 +220,8 @@
   "edge_mobile_browser_warning_title": "Edge on Android may black-screen in multi-person meetings",
   "edge_mobile_browser_warning_desc": "For the most stable experience, open this meeting in your phone browser, Chrome, or WeChat.",
   "edge_mobile_meeting_notice": "A simplified meeting view is active here. If video is still unstable, switch to your phone browser, Chrome, or WeChat.",
+  "edge_local_video_notice_title": "Local video preview is hidden here",
+  "edge_local_video_notice_desc": "Edge on Android may not render your local video reliably in multi-person meetings. The room can still continue for everyone else.",
   "network_quality_good": "Good",
   "network_quality_fair": "Fair",
   "network_quality_poor": "Poor",
