@@ -67,10 +67,10 @@ function MeetingScreen({
     <div className="h-screen bg-gray-950 flex flex-col overflow-hidden relative">
       <div ref={fullscreenHostRef} className={`absolute inset-0 z-[70] ${activeFullscreenTileId ? 'pointer-events-auto' : 'pointer-events-none'}`} />
 
-      <div className={`h-16 bg-gray-900/90 backdrop-blur border-b border-gray-800 flex justify-between items-center px-6 z-10 transition-opacity duration-200 ${activeFullscreenTileId ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 bg-gray-800/50 px-3 py-1.5 rounded-lg border border-gray-700/50">
-            <Users size={16} className="text-gray-400" />
+      <div className={`min-h-[64px] bg-gray-900/90 backdrop-blur border-b border-gray-800 flex flex-col gap-3 px-3 py-3 md:h-16 md:flex-row md:justify-between md:items-center md:px-6 md:py-0 z-10 transition-opacity duration-200 ${activeFullscreenTileId ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+        <div className="flex min-w-0 flex-col gap-3 md:flex-row md:items-center md:gap-3">
+          <div className="flex items-center gap-2 bg-gray-800/50 px-3 py-1.5 rounded-lg border border-gray-700/50 self-start">
+            <Users size={15} className="text-gray-400" />
             <span className="font-mono font-medium text-gray-200">{roomId}</span>
             <button
               onClick={copyRoomId}
@@ -81,7 +81,7 @@ function MeetingScreen({
             </button>
           </div>
 
-          <div className="flex items-center gap-3 ml-2">
+          <div className="flex flex-wrap items-center gap-2 md:ml-2 md:gap-3">
             <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md border ${
               myRole === 'creator'
                 ? 'bg-red-500/10 border-red-500/20 text-red-500'
@@ -95,7 +95,7 @@ function MeetingScreen({
               {myRole === 'admin' && <Shield size={14} />}
               {myRole === 'host' && <Crown size={14} />}
               {myRole === 'participant' && <Users size={14} />}
-              <span className="text-[10px] font-medium uppercase tracking-wider">
+              <span className="text-[10px] font-medium uppercase tracking-wider leading-none">
                 {myRole === 'creator' ? t('creator_label') : myRole.toUpperCase()}
               </span>
             </div>
@@ -103,9 +103,9 @@ function MeetingScreen({
             {isCreator && (
               <button
                 onClick={handleCloseRoom}
-                className="ml-2 py-1.5 px-3 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-medium transition-colors border border-red-500/50 shadow-sm shadow-red-900/20 flex items-center gap-1.5"
+                className="py-1.5 px-3 bg-red-600 hover:bg-red-500 text-white rounded-lg text-[11px] md:text-xs font-medium transition-colors border border-red-500/50 shadow-sm shadow-red-900/20 flex items-center gap-1.5"
               >
-                <UserX size={14} />
+                <UserX size={13} />
                 {t('close_room')}
               </button>
             )}
@@ -116,7 +116,7 @@ function MeetingScreen({
                 : 'bg-red-500/10 border-red-500/20 text-red-500'
             }`}>
               {signalingState === 'connected' ? <Wifi size={14} /> : <WifiOff size={14} />}
-              <span className="text-[10px] font-medium uppercase tracking-wider">
+              <span className="text-[10px] font-medium uppercase tracking-wider leading-none">
                 {signalingState === 'connected' ? t('signal_ok') : t('offline')}
               </span>
             </div>
@@ -136,7 +136,7 @@ function MeetingScreen({
                 ) : (
                   <Loader2 size={14} className="animate-spin" />
                 )}
-                <span className="text-[10px] font-medium uppercase tracking-wider">
+                <span className="text-[10px] font-medium uppercase tracking-wider leading-none">
                   {connectionStatus}
                 </span>
               </div>
@@ -144,7 +144,7 @@ function MeetingScreen({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="hidden md:flex items-center gap-2">
           <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse"></div>
           <span className="text-xs text-gray-500 font-medium uppercase tracking-wide">{t('live')}</span>
         </div>
@@ -167,7 +167,7 @@ function MeetingScreen({
         </div>
       )}
 
-      <div className="flex-1 p-4 overflow-y-auto bg-[#121212] flex items-center justify-center relative">
+      <div className="flex-1 px-2 py-3 md:p-4 overflow-y-auto bg-[#121212] flex items-center justify-center relative">
         <MeetingChatPanel
           t={t}
           isOpen={isChatOpen}

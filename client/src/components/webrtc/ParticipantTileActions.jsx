@@ -42,23 +42,23 @@ function ParticipantTileActions({
     <>
       <button
         onClick={() => toggleFullscreen(userId)}
-        className="p-2 bg-black/40 hover:bg-black/60 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105 border border-white/10"
+        className="p-1.5 md:p-2 bg-black/40 hover:bg-black/60 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105 border border-white/10"
         title={activeFullscreenTileId === userId ? (t('restore_video') || 'Restore') : (t('fullscreen_video') || 'Fullscreen')}
       >
-        {activeFullscreenTileId === userId ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        {activeFullscreenTileId === userId ? <Minimize2 size={13} className="md:h-[14px] md:w-[14px]" /> : <Maximize2 size={13} className="md:h-[14px] md:w-[14px]" />}
       </button>
       {(canManage || canKick || canMute) && (
         <div ref={menuRef} className="relative">
           <button
             onClick={() => setIsMenuOpen((prev) => !prev)}
-            className="p-2 bg-black/40 hover:bg-black/60 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105 border border-white/10"
+            className="p-1.5 md:p-2 bg-black/40 hover:bg-black/60 text-white rounded-lg backdrop-blur-sm shadow-lg transition-transform hover:scale-105 border border-white/10"
             title={t('host_actions_tooltip') || 'Host actions'}
           >
-            <MoreVertical size={14} />
+            <MoreVertical size={13} className="md:h-[14px] md:w-[14px]" />
           </button>
 
           {isMenuOpen && (
-            <div className="absolute right-0 top-full mt-2 w-48 bg-gray-950/95 border border-white/10 rounded-xl shadow-2xl overflow-hidden">
+            <div className="absolute right-0 top-full mt-2 w-44 md:w-48 bg-gray-950/95 border border-white/10 rounded-xl shadow-2xl overflow-hidden">
               {canManage && (
                 <button
                   onClick={() => {

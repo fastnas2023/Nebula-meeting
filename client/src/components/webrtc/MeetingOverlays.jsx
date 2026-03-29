@@ -21,13 +21,13 @@ function MeetingOverlays({
       {isSharePreviewOpen && sharePreviewStream && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
-            <div className="p-4 border-b border-gray-800 flex items-center justify-between bg-gray-900/50">
+            <div className="p-3 md:p-4 border-b border-gray-800 flex items-center justify-between bg-gray-900/50">
               <div className="flex items-center gap-2">
                 <div className="p-2 bg-blue-500/10 rounded-lg">
-                  <Monitor className="text-blue-500" size={20} />
+                  <Monitor className="text-blue-500" size={18} />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-white leading-tight">{t('confirm_screen_share_title')}</h3>
+                  <h3 className="text-base md:text-lg font-semibold text-white leading-tight">{t('confirm_screen_share_title')}</h3>
                   <p className="text-xs text-gray-400">{t('confirm_screen_share_desc')}</p>
                 </div>
               </div>
@@ -37,7 +37,7 @@ function MeetingOverlays({
               </button>
             </div>
 
-            <div className="flex-1 bg-black p-4 flex items-center justify-center overflow-hidden relative group">
+            <div className="flex-1 bg-black p-2 md:p-4 flex items-center justify-center overflow-hidden relative group">
               <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-800/20 via-black to-black pointer-events-none"></div>
               <video
                 ref={(ref) => {
@@ -52,7 +52,7 @@ function MeetingOverlays({
               />
             </div>
 
-            <div className="p-6 bg-gray-900 border-t border-gray-800 space-y-6">
+            <div className="p-4 md:p-6 bg-gray-900 border-t border-gray-800 space-y-4 md:space-y-6">
               <div className="flex items-start gap-3 text-yellow-400 bg-yellow-400/5 p-4 rounded-xl border border-yellow-400/10">
                 <AlertTriangle size={20} className="shrink-0 mt-0.5" />
                 <div className="space-y-1">
@@ -61,16 +61,16 @@ function MeetingOverlays({
                 </div>
               </div>
 
-              <div className="flex gap-3 justify-end">
+              <div className="flex flex-col-reverse md:flex-row gap-3 justify-end">
                 <button
                   onClick={cancelScreenShare}
-                  className="px-6 py-2.5 rounded-xl font-medium text-gray-400 hover:text-white hover:bg-gray-800 transition-all border border-transparent hover:border-gray-700"
+                  className="w-full md:w-auto px-6 py-2.5 rounded-xl font-medium text-gray-400 hover:text-white hover:bg-gray-800 transition-all border border-transparent hover:border-gray-700"
                 >
                   {t('cancel_btn')}
                 </button>
                 <button
                   onClick={confirmScreenShare}
-                  className="px-6 py-2.5 rounded-xl font-bold bg-blue-600 text-white hover:bg-blue-500 transition-all shadow-lg shadow-blue-900/20 flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+                  className="w-full md:w-auto px-6 py-2.5 rounded-xl font-bold bg-blue-600 text-white hover:bg-blue-500 transition-all shadow-lg shadow-blue-900/20 flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
                 >
                   <Check size={18} />
                   {t('start_sharing_btn')}
@@ -84,7 +84,7 @@ function MeetingOverlays({
       {isRecordModeOpen && !isRecording && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
-            <div className="p-4 border-b border-gray-800 flex items-center justify-between bg-gray-900/50">
+            <div className="p-3 md:p-4 border-b border-gray-800 flex items-center justify-between bg-gray-900/50">
               <div className="flex items-center gap-2">
                 <div className="p-2 bg-red-500/10 rounded-lg border border-red-500/20">
                   <div className="w-5 h-5 rounded-full border-2 border-red-400 flex items-center justify-center">
@@ -92,7 +92,7 @@ function MeetingOverlays({
                   </div>
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-white leading-tight">{t('recording_mode_title')}</h3>
+                  <h3 className="text-base md:text-lg font-semibold text-white leading-tight">{t('recording_mode_title')}</h3>
                   <p className="text-xs text-gray-400">{t('recording_mode_desc')}</p>
                 </div>
               </div>
@@ -101,10 +101,10 @@ function MeetingOverlays({
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
+            <div className="p-4 md:p-6 space-y-4">
               <button
                 onClick={startRecording}
-                className="w-full text-left p-5 rounded-2xl border border-gray-700 hover:border-red-500/40 bg-gray-950/30 hover:bg-gray-800/40 transition-all"
+                className="w-full text-left p-4 md:p-5 rounded-2xl border border-gray-700 hover:border-red-500/40 bg-gray-950/30 hover:bg-gray-800/40 transition-all"
               >
                 <div className="flex items-center justify-between gap-4">
                   <div>
@@ -120,7 +120,7 @@ function MeetingOverlays({
 
               <button
                 onClick={startCompositeRecording}
-                className="w-full text-left p-5 rounded-2xl border border-gray-700 hover:border-blue-500/40 bg-gray-950/30 hover:bg-gray-800/40 transition-all"
+                className="w-full text-left p-4 md:p-5 rounded-2xl border border-gray-700 hover:border-blue-500/40 bg-gray-950/30 hover:bg-gray-800/40 transition-all"
               >
                 <div className="flex items-center justify-between gap-4">
                   <div>
@@ -150,16 +150,16 @@ function MeetingOverlays({
       {isLeaveOptionsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200" onClick={() => setIsLeaveOptionsOpen(false)}>
           <div className="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
-            <div className="p-4 border-b border-gray-800 flex items-center justify-between bg-gray-900/50">
+            <div className="p-3 md:p-4 border-b border-gray-800 flex items-center justify-between bg-gray-900/50">
               <div>
-                <h3 className="text-lg font-semibold text-white leading-tight">{t('leave_options_title') || t('confirm_leave_room') || 'Leave room'}</h3>
+                <h3 className="text-base md:text-lg font-semibold text-white leading-tight">{t('leave_options_title') || t('confirm_leave_room') || 'Leave room'}</h3>
                 <p className="text-xs text-gray-400 mt-1">{t('leave_options_desc') || 'You can leave without closing the room. Host will be transferred.'}</p>
               </div>
               <button onClick={() => setIsLeaveOptionsOpen(false)} className="text-gray-400 hover:text-white transition-colors p-2 hover:bg-gray-800 rounded-lg">
                 <X size={18} />
               </button>
             </div>
-            <div className="p-6 space-y-3">
+            <div className="p-4 md:p-6 space-y-3">
               <button
                 onClick={leaveAndTransferHost}
                 className="w-full px-5 py-3 rounded-2xl bg-white text-black font-bold transition-all transform active:scale-[0.98] flex items-center justify-between"
