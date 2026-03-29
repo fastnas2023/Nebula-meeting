@@ -624,6 +624,62 @@ function WebRTCMeeting({ onBack, addToast, username }) {
     setSpeakingByUserId,
   });
 
+  const {
+    emitJoinRoom,
+    leaveCurrentRoom,
+    requestHighQuality,
+    handleKickUser,
+    handleMuteUser,
+    handleUpdateRole,
+    sendMessage,
+    handleFileSelect,
+    closeAllPeerConnections,
+  } = useMeetingRoomActions({
+    socket,
+    t,
+    addToast,
+    hasPermission,
+    roomId,
+    peersRef,
+    setMessages,
+  });
+
+  const appendSystemMessage = (content, tone = 'notice') => {
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        type: 'system',
+        tone,
+        content,
+        timestamp: Date.now(),
+        senderId: 'system',
+        senderName: 'System',
+      },
+    ]);
+  };
+
+  const rejoinCurrentRoom = () => {
+    if (!hasJoinedMeetingRef.current || hasLeftRoomRef.current || !roomId) return;
+
+    closeAllPeerConnections();
+    setRemoteStreams({});
+    setRemoteRoles({});
+    setParticipantConnectionStatus({});
+    setParticipantStats({});
+    setConnectionStatus('checking');
+    appendSystemMessage(t('reconnecting_status') || 'Reconnecting to the meeting network...', 'warning');
+
+    emitJoinRoom({
+      roomId,
+      nickname,
+      roomPassword,
+      createRoomName,
+      clientId,
+      roomSessionToken: roomSessionTokenRef.current || readRoomSession(roomId),
+    });
+  };
+
   useMeetingSocketListeners({
     socket,
     t,
@@ -693,62 +749,6 @@ function WebRTCMeeting({ onBack, addToast, username }) {
       }
     });
   }, [uiState, participantStats, participantConnectionStatus, isLowDataMode, setLowDataModeEnabled, t]);
-
-  const {
-    emitJoinRoom,
-    leaveCurrentRoom,
-    requestHighQuality,
-    handleKickUser,
-    handleMuteUser,
-    handleUpdateRole,
-    sendMessage,
-    handleFileSelect,
-    closeAllPeerConnections,
-  } = useMeetingRoomActions({
-    socket,
-    t,
-    addToast,
-    hasPermission,
-    roomId,
-    peersRef,
-    setMessages,
-  });
-
-  const appendSystemMessage = (content, tone = 'notice') => {
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        type: 'system',
-        tone,
-        content,
-        timestamp: Date.now(),
-        senderId: 'system',
-        senderName: 'System',
-      },
-    ]);
-  };
-
-  const rejoinCurrentRoom = () => {
-    if (!hasJoinedMeetingRef.current || hasLeftRoomRef.current || !roomId) return;
-
-    closeAllPeerConnections();
-    setRemoteStreams({});
-    setRemoteRoles({});
-    setParticipantConnectionStatus({});
-    setParticipantStats({});
-    setConnectionStatus('checking');
-    appendSystemMessage(t('reconnecting_status') || 'Reconnecting to the meeting network...', 'warning');
-
-    emitJoinRoom({
-      roomId,
-      nickname,
-      roomPassword,
-      createRoomName,
-      clientId,
-      roomSessionToken: roomSessionTokenRef.current || readRoomSession(roomId),
-    });
-  };
 
   const joinRoom = (id) => {
     const targetId = typeof id === 'string' ? id : roomId;
