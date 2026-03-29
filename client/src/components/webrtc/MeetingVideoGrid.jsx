@@ -1,8 +1,213 @@
 import { Activity, Clock3, Crown, FlipHorizontal, Maximize2, MicOff, Minimize2, RotateCw, Shield, TriangleAlert, Users, VideoOff, Wifi, WifiOff } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ZoomableVideoContainer from '../ZoomableVideoContainer';
 import VideoTile from '../VideoTile';
 import ParticipantTileActions from './ParticipantTileActions';
+
+function configureInlineVideoPlayback(video, { muted = false } = {}) {
+  if (!video) return;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.muted = muted;
+  video.defaultMuted = muted;
+  video.setAttribute('playsinline', 'true');
+  video.setAttribute('webkit-playsinline', 'true');
+  video.setAttribute('x5-playsinline', 'true');
+  video.setAttribute('x5-video-player-type', 'h5-page');
+  video.setAttribute('x5-video-player-fullscreen', 'false');
+  video.setAttribute('x-webkit-airplay', 'allow');
+}
+
+async function requestVideoPlayback(video) {
+  if (!video || typeof video.play !== 'function') return;
+  try {
+    const maybePromise = video.play();
+    if (maybePromise && typeof maybePromise.catch === 'function') {
+      await maybePromise.catch(() => {});
+    }
+  } catch {}
+}
+
+function detectTouchCapableDevice() {
+  if (typeof window === 'undefined') return false;
+
+  const coarsePointer = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(pointer: coarse)').matches
+    : false;
+  const touchPoints = typeof navigator !== 'undefined' ? navigator.maxTouchPoints || 0 : 0;
+  return coarsePointer || touchPoints > 0;
+}
+
+function shouldPreferCanvasFallback() {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /EdgA|EdgiOS/i.test(ua) && detectTouchCapableDevice();
+}
+
+function StreamVideo({ stream, className, muted = false, externalRef = null }) {
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [useCanvasFallback, setUseCanvasFallback] = useState(false);
+
+  useEffect(() => {
+    setUseCanvasFallback(shouldPreferCanvasFallback());
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (externalRef) {
+      externalRef.current = video;
+    }
+
+    configureInlineVideoPlayback(video, { muted });
+
+    if (video.srcObject !== stream) {
+      video.srcObject = stream || null;
+    }
+
+    let stalledTicks = 0;
+    let lastCurrentTime = -1;
+    let lastFrameAt = Date.now();
+    let cancelVideoFrameCallback = null;
+
+    const handleReady = () => {
+      lastFrameAt = Date.now();
+      void requestVideoPlayback(video);
+    };
+    const recoverPlayback = () => {
+      if (!video.srcObject && stream) {
+        video.srcObject = stream;
+      }
+      configureInlineVideoPlayback(video, { muted });
+      if (!video.paused || video.readyState >= 2) {
+        void requestVideoPlayback(video);
+        return;
+      }
+      void requestVideoPlayback(video);
+    };
+    const onFrame = () => {
+      lastFrameAt = Date.now();
+      if (typeof video.requestVideoFrameCallback === 'function') {
+        const callbackId = video.requestVideoFrameCallback(() => {
+          onFrame();
+        });
+        cancelVideoFrameCallback = () => {
+          if (typeof video.cancelVideoFrameCallback === 'function') {
+            video.cancelVideoFrameCallback(callbackId);
+          }
+        };
+      }
+    };
+
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      onFrame();
+    }
+
+    video.addEventListener('loadedmetadata', handleReady);
+    video.addEventListener('canplay', handleReady);
+    video.addEventListener('pause', recoverPlayback);
+    video.addEventListener('playing', handleReady);
+    document.addEventListener('visibilitychange', recoverPlayback);
+    window.addEventListener('focus', recoverPlayback);
+    window.addEventListener('pageshow', recoverPlayback);
+    const watchdogId = window.setInterval(() => {
+      recoverPlayback();
+
+      const hasLiveVideoTrack = !!stream?.getVideoTracks?.().some((track) => track.readyState === 'live');
+      if (!hasLiveVideoTrack) {
+        stalledTicks = 0;
+        lastCurrentTime = -1;
+        return;
+      }
+
+      if (video.readyState >= 2 && video.videoWidth > 0 && video.currentTime === lastCurrentTime) {
+        stalledTicks += 1;
+      } else {
+        stalledTicks = 0;
+      }
+      lastCurrentTime = video.currentTime;
+
+      const frameSilenceMs = Date.now() - lastFrameAt;
+      if ((stalledTicks >= 3 || frameSilenceMs >= 3500) && detectTouchCapableDevice()) {
+        setUseCanvasFallback(true);
+      }
+    }, 1500);
+    void requestVideoPlayback(video);
+
+    return () => {
+      cancelVideoFrameCallback?.();
+      video.removeEventListener('loadedmetadata', handleReady);
+      video.removeEventListener('canplay', handleReady);
+      video.removeEventListener('pause', recoverPlayback);
+      video.removeEventListener('playing', handleReady);
+      document.removeEventListener('visibilitychange', recoverPlayback);
+      window.removeEventListener('focus', recoverPlayback);
+      window.removeEventListener('pageshow', recoverPlayback);
+      window.clearInterval(watchdogId);
+      if (externalRef?.current === video) {
+        externalRef.current = null;
+      }
+    };
+  }, [stream, muted, externalRef]);
+
+  useEffect(() => {
+    if (!useCanvasFallback) return undefined;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return undefined;
+
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) return undefined;
+
+    let animationFrameId = 0;
+    let lastDrawAt = 0;
+    const targetFrameInterval = 1000 / 15;
+
+    const drawFrame = (now = 0) => {
+      if (now - lastDrawAt >= targetFrameInterval) {
+        if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+          if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+          }
+          context.drawImage(video, 0, 0, canvas.width, canvas.height);
+          lastDrawAt = now;
+        }
+      }
+
+      animationFrameId = window.requestAnimationFrame(drawFrame);
+    };
+
+    animationFrameId = window.requestAnimationFrame(drawFrame);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrameId);
+    };
+  }, [useCanvasFallback, stream]);
+
+  return (
+    <div className="relative h-full w-full">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={muted}
+        disablePictureInPicture
+        controls={false}
+        className={useCanvasFallback ? 'pointer-events-none absolute inset-0 h-full w-full opacity-0' : className}
+      />
+      {useCanvasFallback ? (
+        <canvas
+          ref={canvasRef}
+          className={className}
+        />
+      ) : null}
+    </div>
+  );
+}
 
 function MeetingVideoGrid({
   t,
@@ -148,15 +353,9 @@ function MeetingVideoGrid({
           }
         >
           <ZoomableVideoContainer>
-            <video
-              ref={(el) => {
-                localVideoRef.current = el;
-                if (el && localStreamRef.current && el.srcObject !== localStreamRef.current) {
-                  el.srcObject = localStreamRef.current;
-                }
-              }}
-              autoPlay
-              playsInline
+            <StreamVideo
+              stream={localStreamRef.current}
+              externalRef={localVideoRef}
               muted
               className={`w-full h-full object-contain ${shouldFlipLocalVideoCss ? 'transform scale-x-[-1]' : ''} ${!isSharing && !isVideoEnabled ? 'hidden' : ''}`}
             />
@@ -349,22 +548,7 @@ function MeetingVideoGrid({
 }
 
 function VideoPlayer({ stream }) {
-  const videoRef = useRef(null);
-
-  useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
-    }
-  }, [stream]);
-
-  return (
-    <video
-      ref={videoRef}
-      autoPlay
-      playsInline
-      className="w-full h-full object-contain"
-    />
-  );
+  return <StreamVideo stream={stream} className="w-full h-full object-contain" />;
 }
 
 export default MeetingVideoGrid;

@@ -4,6 +4,7 @@ import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 const ZoomableVideoContainer = ({ children, initialZoom = 1, minZoom = 0.5, maxZoom = 3.0, step = 0.1 }) => {
   const [zoom, setZoom] = useState(initialZoom);
   const [isHovered, setIsHovered] = useState(false);
+  const [isTouchDevice, setIsTouchDevice] = useState(false);
   const containerRef = useRef(null);
   
   // Touch state
@@ -26,12 +27,14 @@ const ZoomableVideoContainer = ({ children, initialZoom = 1, minZoom = 0.5, maxZ
   };
 
   const handleDoubleClick = (e) => {
+    if (isTouchDevice) return;
     e.stopPropagation();
     setZoom(prev => (prev > 1.0 ? 1.0 : 2.0)); // Toggle between 1x and 2x
   };
 
   // Touch Handlers for Pinch-to-Zoom
   const handleTouchStart = (e) => {
+    if (isTouchDevice) return;
     if (e.touches.length === 2) {
       const dist = Math.hypot(
         e.touches[0].pageX - e.touches[1].pageX,
@@ -43,6 +46,7 @@ const ZoomableVideoContainer = ({ children, initialZoom = 1, minZoom = 0.5, maxZ
   };
 
   const handleTouchMove = (e) => {
+    if (isTouchDevice) return;
     if (e.touches.length === 2 && touchStartDist.current !== null) {
       e.preventDefault(); // Prevent page scroll while pinching
       const dist = Math.hypot(
@@ -61,10 +65,35 @@ const ZoomableVideoContainer = ({ children, initialZoom = 1, minZoom = 0.5, maxZ
     touchStartDist.current = null;
   };
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const mediaQuery = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(pointer: coarse)')
+      : null;
+
+    const updateTouchMode = () => {
+      const coarsePointer = !!mediaQuery?.matches;
+      const touchPoints = typeof navigator !== 'undefined' ? navigator.maxTouchPoints || 0 : 0;
+      const nextIsTouch = coarsePointer || touchPoints > 0;
+      setIsTouchDevice(nextIsTouch);
+      if (nextIsTouch) {
+        setZoom(1);
+      }
+    };
+
+    updateTouchMode();
+    mediaQuery?.addEventListener?.('change', updateTouchMode);
+
+    return () => {
+      mediaQuery?.removeEventListener?.('change', updateTouchMode);
+    };
+  }, []);
+
   // Prevent wheel scroll propagation when hovering
   useEffect(() => {
     const element = containerRef.current;
-    if (!element) return;
+    if (!element || isTouchDevice) return;
 
     const onWheel = (e) => {
         // Only intercept if we are hovering
@@ -87,7 +116,17 @@ const ZoomableVideoContainer = ({ children, initialZoom = 1, minZoom = 0.5, maxZ
     return () => {
         element.removeEventListener('wheel', onWheel);
     };
-  }, [isHovered, minZoom, maxZoom]);
+  }, [isHovered, minZoom, maxZoom, isTouchDevice]);
+
+  if (isTouchDevice) {
+    return (
+      <div className="relative w-full h-full overflow-hidden">
+        <div className="w-full h-full flex items-center justify-center">
+          {children}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div 
@@ -101,8 +140,8 @@ const ZoomableVideoContainer = ({ children, initialZoom = 1, minZoom = 0.5, maxZ
       onTouchEnd={handleTouchEnd}
     >
       <div 
-        className="w-full h-full transition-transform duration-200 ease-out origin-center flex items-center justify-center"
-        style={{ transform: `scale(${zoom})` }}
+        className="w-full h-full origin-center flex items-center justify-center transition-transform duration-200 ease-out"
+        style={zoom === 1 ? undefined : { transform: `scale(${zoom})`, willChange: 'transform' }}
       >
         {children}
       </div>
